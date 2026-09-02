@@ -1,13 +1,15 @@
 # Musical Memories
 
-A local journal that ties entries — a date, a note, optional photos — to a
-Spotify playlist. The music side of an entry is always a playlist, even when
-it's really just one song (make a single-track playlist in Spotify for that
-case).
+A local, multi-user journal that ties entries — a date, a note, optional
+photos — to a Spotify playlist. The music side of an entry is always a
+playlist, even when it's really just one song (make a single-track playlist
+in Spotify for that case). Each entry is private by default and can be made
+public; the entry list shows everyone's public entries plus your own private
+ones.
 
 ## Stack
 
-- **Backend** — Python, FastAPI, SQLAlchemy (SQLite), Spotipy
+- **Backend** — Python, FastAPI, SQLAlchemy (SQLite), Spotipy, JWT auth (PyJWT + bcrypt)
 - **Frontend** — React + TypeScript (Vite)
 
 ## Spotify API
@@ -17,6 +19,27 @@ no user login), which is enough to search Spotify's public catalog of
 playlists. Register an app at https://developer.spotify.com/dashboard,
 then copy `backend/.env.example` to `backend/.env` and fill in
 `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`.
+
+## Auth
+
+Accounts are local to this app (username/email/password), not tied to
+Spotify login. In `backend/.env`, also set `JWT_SECRET_KEY` — generate one
+with:
+
+```
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Register via `POST /api/users`, log in via `POST /api/sessions` (returns a
+bearer token), send it as `Authorization: Bearer <token>` on subsequent
+requests. The frontend's login/register screen handles this for you and
+persists the token in the browser.
+
+## API
+
+REST resources: `POST /api/users` (register), `GET /api/users/me`,
+`POST /api/sessions` (login), `GET/POST /api/entries`,
+`GET/PATCH/DELETE /api/entries/{id}`, `GET /api/spotify/playlists?q=`.
 
 ## Running locally
 

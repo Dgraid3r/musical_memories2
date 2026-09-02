@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { createEntry } from '../api'
+import { ApiError, createEntry } from '../api'
+import { useAuth } from '../auth/AuthContext'
 import type { JournalEntry, PlaylistResult } from '../types'
 import PlaylistSearch from './PlaylistSearch'
 
@@ -10,10 +11,12 @@ interface Props {
 const today = () => new Date().toISOString().slice(0, 10)
 
 export default function NewEntryForm({ onCreated }: Props) {
+  const { token } = useAuth()
   const [entryDate, setEntryDate] = useState(today())
   const [text, setText] = useState('')
   const [playlist, setPlaylist] = useState<PlaylistResult | null>(null)
   const [images, setImages] = useState<File[]>([])
+  const [isPublic, setIsPublic] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -23,17 +26,19 @@ export default function NewEntryForm({ onCreated }: Props) {
       setError('Pick a Spotify playlist first.')
       return
     }
+    if (!token) return
     setSubmitting(true)
     setError(null)
     try {
-      const entry = await createEntry({ entryDate, text, playlist, images })
+      const entry = await createEntry({ entryDate, text, playlist, images, isPublic }, token)
       onCreated(entry)
       setText('')
       setPlaylist(null)
       setImages([])
+      setIsPublic(false)
       setEntryDate(today())
-    } catch {
-      setError('Could not save this memory. Try again.')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not save this memory. Try again.')
     } finally {
       setSubmitting(false)
     }
@@ -65,6 +70,11 @@ export default function NewEntryForm({ onCreated }: Props) {
         multiple
         onChange={(e) => setImages(Array.from(e.target.files ?? []))}
       />
+
+      <label className="checkbox-label">
+        <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
+        Make this memory public
+      </label>
 
       {error && <p className="error">{error}</p>}
 
