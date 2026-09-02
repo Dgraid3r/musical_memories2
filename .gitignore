@@ -8,3 +8,4 @@ backend/musical_memories.db
 backend/uploads/*
 !backend/uploads/.gitkeep
 frontend/dist/
+.pytest_cache/
