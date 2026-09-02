@@ -71,6 +71,25 @@ def test_list_entries_other_user_sees_only_public(client, make_user):
     assert {e["playlist_id"] for e in res.json()} == {"pub"}
 
 
+def test_list_entries_is_symmetric_across_two_users_with_private_entries(client, make_user):
+    """Each user's private entries must be hidden from the OTHER user in both
+    directions at once, not just checked one-way with a single private owner."""
+    alice = make_user("alice")
+    bob = make_user("bob")
+    _create_entry(client, alice["headers"], is_public=False, playlist_id="alice-priv")
+    _create_entry(client, alice["headers"], is_public=True, playlist_id="alice-pub")
+    _create_entry(client, bob["headers"], is_public=False, playlist_id="bob-priv")
+    _create_entry(client, bob["headers"], is_public=True, playlist_id="bob-pub")
+
+    alice_view = {e["playlist_id"] for e in client.get("/api/entries", headers=alice["headers"]).json()}
+    bob_view = {e["playlist_id"] for e in client.get("/api/entries", headers=bob["headers"]).json()}
+    anon_view = {e["playlist_id"] for e in client.get("/api/entries").json()}
+
+    assert alice_view == {"alice-priv", "alice-pub", "bob-pub"}
+    assert bob_view == {"bob-priv", "bob-pub", "alice-pub"}
+    assert anon_view == {"alice-pub", "bob-pub"}
+
+
 def test_get_private_entry_as_non_owner_returns_404(client, make_user):
     alice = make_user("alice")
     bob = make_user("bob")
@@ -107,6 +126,22 @@ def test_get_public_entry_visible_to_anyone(client, make_user):
 def test_get_nonexistent_entry_returns_404(client):
     res = client.get("/api/entries/999999")
     assert res.status_code == 404
+
+
+def test_private_entry_404_is_indistinguishable_from_missing_entry_404(client, make_user):
+    """A non-owner must not be able to tell 'exists but private' apart from
+    'does not exist' -- same status code AND same response body."""
+    alice = make_user("alice")
+    bob = make_user("bob")
+    private_id = _create_entry(client, alice["headers"], is_public=False).json()["id"]
+
+    res_private_as_bob = client.get(f"/api/entries/{private_id}", headers=bob["headers"])
+    res_private_anon = client.get(f"/api/entries/{private_id}")
+    res_missing = client.get("/api/entries/999999")
+
+    assert res_private_as_bob.status_code == res_private_anon.status_code == res_missing.status_code == 404
+    assert res_private_as_bob.json() == res_missing.json()
+    assert res_private_anon.json() == res_missing.json()
 
 
 def test_patch_toggles_visibility(client, make_user):
