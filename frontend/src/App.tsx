@@ -4,6 +4,7 @@ import { useAuth } from './auth/AuthContext'
 import AuthForm from './components/AuthForm'
 import EntryCard from './components/EntryCard'
 import NewEntryForm from './components/NewEntryForm'
+import SearchBar from './components/SearchBar'
 import type { JournalEntry } from './types'
 import './App.css'
 
@@ -12,14 +13,16 @@ export default function App() {
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => {
     if (authLoading) return
-    fetchEntries(token)
+    setLoading(true)
+    fetchEntries(token, { q: searchQuery || undefined })
       .then(setEntries)
       .catch(() => setError('Could not load memories.'))
       .finally(() => setLoading(false))
-  }, [token, authLoading])
+  }, [token, authLoading, searchQuery])
 
   async function handleDelete(id: number) {
     if (!token) return
@@ -50,12 +53,17 @@ export default function App() {
       </header>
 
       <main>
-        <NewEntryForm onCreated={(entry) => setEntries((prev) => [entry, ...prev])} />
+        <NewEntryForm onCreated={(entry) => setEntries((prev) => (searchQuery ? prev : [entry, ...prev]))} />
+
+        <SearchBar onSearch={setSearchQuery} />
 
         <section className="entry-list">
           {loading && <p>Loading...</p>}
           {error && <p className="error">{error}</p>}
-          {!loading && !error && entries.length === 0 && (
+          {!loading && !error && entries.length === 0 && searchQuery && (
+            <p className="hint">No memories match "{searchQuery}".</p>
+          )}
+          {!loading && !error && entries.length === 0 && !searchQuery && (
             <p className="hint">No memories yet — add your first one above.</p>
           )}
           {entries.map((entry) => (

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { addImages, updateEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import type { JournalEntry } from '../types'
+import TagInput from './TagInput'
 
 interface Props {
   entry: JournalEntry
@@ -25,6 +26,9 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
   const { user, token } = useAuth()
   const [togglingVisibility, setTogglingVisibility] = useState(false)
   const [addingPhotos, setAddingPhotos] = useState(false)
+  const [editingTags, setEditingTags] = useState(false)
+  const [savingTags, setSavingTags] = useState(false)
+  const [draftTags, setDraftTags] = useState<string[]>([])
   const isOwner = user?.id === entry.user_id
   const isCoauthor = entry.coauthors.some((c) => c.id === user?.id)
   const canEditContent = isOwner || isCoauthor
@@ -37,6 +41,23 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
       onUpdated(updated)
     } finally {
       setTogglingVisibility(false)
+    }
+  }
+
+  function startEditingTags() {
+    setDraftTags(entry.tags.map((t) => t.name))
+    setEditingTags(true)
+  }
+
+  async function saveTags() {
+    if (!token) return
+    setSavingTags(true)
+    try {
+      const updated = await updateEntry(entry.id, { tags: draftTags }, token)
+      onUpdated(updated)
+      setEditingTags(false)
+    } finally {
+      setSavingTags(false)
     }
   }
 
@@ -79,6 +100,35 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
       </header>
 
       {entry.text && <p className="entry-text">{entry.text}</p>}
+
+      {editingTags ? (
+        <div className="tag-edit">
+          <TagInput selected={draftTags} onChange={setDraftTags} />
+          <div className="tag-edit-actions">
+            <button type="button" onClick={saveTags} disabled={savingTags}>
+              {savingTags ? 'Saving...' : 'Save tags'}
+            </button>
+            <button type="button" className="link-btn" onClick={() => setEditingTags(false)} disabled={savingTags}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="entry-tags-row">
+          {entry.tags.length > 0 && (
+            <ul className="entry-tag-chips">
+              {entry.tags.map((tag) => (
+                <li key={tag.id}>{tag.name}</li>
+              ))}
+            </ul>
+          )}
+          {canEditContent && (
+            <button type="button" className="link-btn" onClick={startEditingTags}>
+              {entry.tags.length > 0 ? 'Edit tags' : '+ Add tags'}
+            </button>
+          )}
+        </div>
+      )}
 
       {entry.images.length > 0 && (
         <div className="entry-images">

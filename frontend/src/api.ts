@@ -55,9 +55,24 @@ export async function searchUsers(query: string, token: string): Promise<UserPub
   return res.json()
 }
 
-export async function fetchEntries(token: string | null): Promise<JournalEntry[]> {
-  const res = await fetch('/api/entries', { headers: authHeaders(token) })
+export interface EntrySearchParams {
+  q?: string
+  tag?: string
+}
+
+export async function fetchEntries(token: string | null, params: EntrySearchParams = {}): Promise<JournalEntry[]> {
+  const query = new URLSearchParams()
+  if (params.q) query.set('q', params.q)
+  if (params.tag) query.set('tag', params.tag)
+  const qs = query.toString()
+  const res = await fetch(`/api/entries${qs ? `?${qs}` : ''}`, { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load entries'))
+  return res.json()
+}
+
+export async function fetchTags(token: string | null): Promise<string[]> {
+  const res = await fetch('/api/entries/tags', { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load tags'))
   return res.json()
 }
 
@@ -68,7 +83,7 @@ export async function deleteEntry(id: number, token: string): Promise<void> {
 
 export async function updateEntry(
   id: number,
-  updates: { text?: string; is_public?: boolean; coauthor_usernames?: string[] },
+  updates: { text?: string; is_public?: boolean; coauthor_usernames?: string[]; tags?: string[] },
   token: string,
 ): Promise<JournalEntry> {
   const res = await fetch(`/api/entries/${id}`, {
@@ -103,6 +118,7 @@ export interface NewEntryInput {
   images: File[]
   isPublic: boolean
   coauthorUsernames: string[]
+  tags: string[]
 }
 
 export async function createEntry(input: NewEntryInput, token: string): Promise<JournalEntry> {
@@ -116,6 +132,7 @@ export async function createEntry(input: NewEntryInput, token: string): Promise<
   if (input.playlist.image_url) form.set('playlist_image_url', input.playlist.image_url)
   form.set('is_public', String(input.isPublic))
   for (const username of input.coauthorUsernames) form.append('coauthor_usernames', username)
+  for (const tag of input.tags) form.append('tags', tag)
   for (const image of input.images) form.append('images', image)
 
   const res = await fetch('/api/entries', { method: 'POST', headers: authHeaders(token), body: form })
