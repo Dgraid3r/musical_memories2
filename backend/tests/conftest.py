@@ -18,7 +18,7 @@ os.environ.setdefault("SPOTIFY_REDIRECT_URI", "http://localhost:8000/api/spotify
 import pytest
 from fastapi.testclient import TestClient
 
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 from app.main import app
 
 
@@ -32,6 +32,18 @@ def _clean_database():
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture
+def db_session():
+    """A direct DB session for tests that need to set up or assert on rows
+    the API surface doesn't expose (e.g. spotify_tokens, which never appears
+    in any response body)."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 @pytest.fixture
