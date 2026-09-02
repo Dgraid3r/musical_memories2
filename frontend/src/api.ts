@@ -1,4 +1,4 @@
-import type { JournalEntry, PlaylistResult, User } from './types'
+import type { JournalEntry, PlaylistResult, User, UserPublic } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -49,6 +49,12 @@ export async function fetchCurrentUser(token: string): Promise<User> {
   return res.json()
 }
 
+export async function searchUsers(query: string, token: string): Promise<UserPublic[]> {
+  const res = await fetch(`/api/users?q=${encodeURIComponent(query)}`, { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'User search failed'))
+  return res.json()
+}
+
 export async function fetchEntries(token: string | null): Promise<JournalEntry[]> {
   const res = await fetch('/api/entries', { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load entries'))
@@ -62,7 +68,7 @@ export async function deleteEntry(id: number, token: string): Promise<void> {
 
 export async function updateEntry(
   id: number,
-  updates: { text?: string; is_public?: boolean },
+  updates: { text?: string; is_public?: boolean; coauthor_usernames?: string[] },
   token: string,
 ): Promise<JournalEntry> {
   const res = await fetch(`/api/entries/${id}`, {
@@ -74,6 +80,15 @@ export async function updateEntry(
   return res.json()
 }
 
+export async function addImages(id: number, images: File[], token: string): Promise<JournalEntry> {
+  const form = new FormData()
+  for (const image of images) form.append('images', image)
+
+  const res = await fetch(`/api/entries/${id}/images`, { method: 'POST', headers: authHeaders(token), body: form })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to add photos'))
+  return res.json()
+}
+
 export async function searchPlaylists(query: string): Promise<PlaylistResult[]> {
   const res = await fetch(`/api/spotify/playlists?q=${encodeURIComponent(query)}`)
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Playlist search failed'))
@@ -81,22 +96,26 @@ export async function searchPlaylists(query: string): Promise<PlaylistResult[]> 
 }
 
 export interface NewEntryInput {
-  entryDate: string
+  startDate: string
+  endDate: string
   text: string
   playlist: PlaylistResult
   images: File[]
   isPublic: boolean
+  coauthorUsernames: string[]
 }
 
 export async function createEntry(input: NewEntryInput, token: string): Promise<JournalEntry> {
   const form = new FormData()
-  form.set('entry_date', input.entryDate)
+  form.set('start_date', input.startDate)
+  form.set('end_date', input.endDate)
   form.set('text', input.text)
   form.set('playlist_id', input.playlist.id)
   form.set('playlist_name', input.playlist.name)
   form.set('playlist_url', input.playlist.url)
   if (input.playlist.image_url) form.set('playlist_image_url', input.playlist.image_url)
   form.set('is_public', String(input.isPublic))
+  for (const username of input.coauthorUsernames) form.append('coauthor_usernames', username)
   for (const image of input.images) form.append('images', image)
 
   const res = await fetch('/api/entries', { method: 'POST', headers: authHeaders(token), body: form })

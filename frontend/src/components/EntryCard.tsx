@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { updateEntry } from '../api'
+import { addImages, updateEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import type { JournalEntry } from '../types'
 
@@ -9,10 +9,25 @@ interface Props {
   onUpdated: (entry: JournalEntry) => void
 }
 
+function formatDate(iso: string): string {
+  return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  })
+}
+
+function formatDateRange(startDate: string, endDate: string): string {
+  return startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} – ${formatDate(endDate)}`
+}
+
 export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
   const { user, token } = useAuth()
   const [togglingVisibility, setTogglingVisibility] = useState(false)
+  const [addingPhotos, setAddingPhotos] = useState(false)
   const isOwner = user?.id === entry.user_id
+  const isCoauthor = entry.coauthors.some((c) => c.id === user?.id)
+  const canEditContent = isOwner || isCoauthor
 
   async function toggleVisibility() {
     if (!token) return
@@ -25,18 +40,28 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
     }
   }
 
+  async function handleAddPhotos(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    if (!token || files.length === 0) return
+    setAddingPhotos(true)
+    try {
+      const updated = await addImages(entry.id, files, token)
+      onUpdated(updated)
+    } finally {
+      setAddingPhotos(false)
+    }
+  }
+
   return (
     <article className="entry-card">
       <header>
         <div>
-          <time dateTime={entry.entry_date}>
-            {new Date(entry.entry_date + 'T00:00:00').toLocaleDateString(undefined, {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric',
-            })}
-          </time>
+          <time dateTime={entry.start_date}>{formatDateRange(entry.start_date, entry.end_date)}</time>
           {!isOwner && <span className="owner-tag"> &middot; {entry.owner_username}</span>}
+          {entry.coauthors.length > 0 && (
+            <span className="owner-tag"> with {entry.coauthors.map((c) => c.username).join(', ')}</span>
+          )}
           <span className={`visibility-badge ${entry.is_public ? 'public' : 'private'}`}>
             {entry.is_public ? 'Public' : 'Private'}
           </span>
@@ -61,6 +86,13 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
             <img key={image.id} src={`/uploads/${image.filename}`} alt="" />
           ))}
         </div>
+      )}
+
+      {canEditContent && (
+        <label className="add-photos-label">
+          {addingPhotos ? 'Adding...' : '+ Add photos'}
+          <input type="file" accept="image/*" multiple hidden onChange={handleAddPhotos} disabled={addingPhotos} />
+        </label>
       )}
 
       <iframe

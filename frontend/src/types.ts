@@ -3,11 +3,18 @@ export interface EntryImage {
   filename: string
 }
 
+export interface UserPublic {
+  id: number
+  username: string
+}
+
 export interface JournalEntry {
   id: number
   user_id: number
   owner_username: string
-  entry_date: string
+  coauthors: UserPublic[]
+  start_date: string
+  end_date: string
   text: string | null
   is_public: boolean
   playlist_id: string
