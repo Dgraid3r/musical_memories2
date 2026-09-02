@@ -481,3 +481,39 @@ body {
   padding: 10px 16px;
   font: inherit;
 }
+
+.spotify-connect {
+  display: flex;
+  align-items: center;
+}
+
+.spotify-connect-status.connected {
+  color: #1db954;
+  font-size: 0.85rem;
+}
+
+.spotify-notice {
+  margin: -8px 0 16px;
+}
+
+.playlist-source-toggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.playlist-source-toggle button {
+  background: transparent;
+  border: 1px solid #3a3a3a;
+  color: #b3b3b3;
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.playlist-source-toggle button.active {
+  background: rgba(29, 185, 84, 0.18);
+  color: #1db954;
+  border-color: transparent;
+}

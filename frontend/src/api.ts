@@ -110,6 +110,25 @@ export async function searchPlaylists(query: string): Promise<PlaylistResult[]> 
   return res.json()
 }
 
+export async function fetchSpotifyStatus(token: string): Promise<{ connected: boolean }> {
+  const res = await fetch('/api/spotify/status', { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load Spotify status'))
+  return res.json()
+}
+
+export async function getSpotifyConnectUrl(token: string): Promise<string> {
+  const res = await fetch('/api/spotify/connect', { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to start Spotify connection'))
+  const data = await res.json()
+  return data.authorize_url
+}
+
+export async function fetchMyPlaylists(token: string): Promise<PlaylistResult[]> {
+  const res = await fetch('/api/spotify/me/playlists', { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load your playlists'))
+  return res.json()
+}
+
 export interface NewEntryInput {
   startDate: string
   endDate: string

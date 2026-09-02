@@ -5,8 +5,30 @@ import AuthForm from './components/AuthForm'
 import EntryCard from './components/EntryCard'
 import NewEntryForm from './components/NewEntryForm'
 import SearchBar from './components/SearchBar'
+import SpotifyConnect from './components/SpotifyConnect'
 import type { JournalEntry } from './types'
 import './App.css'
+
+function useSpotifyCallbackNotice(): string | null {
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const spotifyResult = params.get('spotify')
+    if (!spotifyResult) return
+
+    setNotice(
+      spotifyResult === 'connected'
+        ? 'Spotify account connected.'
+        : 'Spotify connection was not completed.',
+    )
+    params.delete('spotify')
+    const rest = params.toString()
+    window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''))
+  }, [])
+
+  return notice
+}
 
 export default function App() {
   const { user, token, loading: authLoading, logout } = useAuth()
@@ -14,6 +36,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const spotifyNotice = useSpotifyCallbackNotice()
 
   useEffect(() => {
     if (authLoading) return
@@ -46,11 +69,14 @@ export default function App() {
         </div>
         <div className="account-bar">
           <span>{user.username}</span>
+          <SpotifyConnect />
           <button type="button" className="link-btn" onClick={logout}>
             Log out
           </button>
         </div>
       </header>
+
+      {spotifyNotice && <p className="hint spotify-notice">{spotifyNotice}</p>}
 
       <main>
         <NewEntryForm onCreated={(entry) => setEntries((prev) => (searchQuery ? prev : [entry, ...prev]))} />
