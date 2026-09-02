@@ -10,13 +10,25 @@ class EntryImageOut(BaseModel):
     filename: str
 
 
+class UserPublic(BaseModel):
+    """Minimal, shareable user info - no email. Used anywhere one user is
+    shown to another (co-author search results, entry authorship)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+
+
 class JournalEntryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     user_id: int
     owner_username: str
-    entry_date: date
+    coauthors: list[UserPublic]
+    start_date: date
+    end_date: date
     text: str | None
     is_public: bool
     playlist_id: str
@@ -30,6 +42,9 @@ class JournalEntryOut(BaseModel):
 class JournalEntryUpdate(BaseModel):
     text: str | None = None
     is_public: bool | None = None
+    # None = leave co-authors unchanged; [] = clear them; only the primary
+    # author is allowed to set this (enforced in the router, not here).
+    coauthor_usernames: list[str] | None = None
 
 
 class PlaylistResult(BaseModel):

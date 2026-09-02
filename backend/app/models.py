@@ -1,9 +1,16 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
+
+entry_coauthors = Table(
+    "entry_coauthors",
+    Base.metadata,
+    Column("entry_id", ForeignKey("journal_entries.id"), primary_key=True),
+    Column("user_id", ForeignKey("users.id"), primary_key=True),
+)
 
 
 class User(Base):
@@ -25,7 +32,12 @@ class JournalEntry(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    entry_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    # A single-day memory has start_date == end_date; the frontend collapses
+    # that case to one displayed date instead of a range.
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -39,6 +51,10 @@ class JournalEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     owner: Mapped["User"] = relationship(back_populates="entries")
+    # Co-authors can edit an entry's content (text, photos) but only the
+    # primary author (owner) can change visibility, manage co-authors, or
+    # delete the entry.
+    coauthors: Mapped[list["User"]] = relationship(secondary=entry_coauthors)
     images: Mapped[list["EntryImage"]] = relationship(
         back_populates="entry", cascade="all, delete-orphan", order_by="EntryImage.id"
     )

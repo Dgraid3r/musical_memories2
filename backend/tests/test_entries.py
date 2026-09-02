@@ -3,18 +3,32 @@ from pathlib import Path
 UPLOADS_DIR = Path(__file__).resolve().parent.parent / "uploads"
 
 
-def _create_entry(client, headers, *, is_public=False, entry_date="2026-01-01", text="hello", playlist_id="p1"):
+def _create_entry(
+    client,
+    headers,
+    *,
+    is_public=False,
+    start_date="2026-01-01",
+    end_date=None,
+    text="hello",
+    playlist_id="p1",
+    coauthor_usernames=None,
+):
+    data = {
+        "start_date": start_date,
+        "text": text,
+        "playlist_id": playlist_id,
+        "playlist_name": "Test Playlist",
+        "playlist_url": f"https://open.spotify.com/playlist/{playlist_id}",
+        "is_public": str(is_public).lower(),
+    }
+    if end_date is not None:
+        data["end_date"] = end_date
     return client.post(
         "/api/entries",
         headers=headers,
-        data={
-            "entry_date": entry_date,
-            "text": text,
-            "playlist_id": playlist_id,
-            "playlist_name": "Test Playlist",
-            "playlist_url": f"https://open.spotify.com/playlist/{playlist_id}",
-            "is_public": str(is_public).lower(),
-        },
+        data=data,
+        files=[("coauthor_usernames", (None, u)) for u in (coauthor_usernames or [])],
     )
 
 
@@ -22,7 +36,7 @@ def test_create_entry_requires_auth(client):
     res = client.post(
         "/api/entries",
         data={
-            "entry_date": "2026-01-01",
+            "start_date": "2026-01-01",
             "playlist_id": "p1",
             "playlist_name": "x",
             "playlist_url": "https://open.spotify.com/playlist/p1",
@@ -39,7 +53,199 @@ def test_create_entry_defaults_to_private(client, make_user):
     assert body["is_public"] is False
     assert body["user_id"] == alice["id"]
     assert body["owner_username"] == "alice"
+    assert body["coauthors"] == []
     assert body["images"] == []
+
+
+# --- Date range ---------------------------------------------------------
+
+
+def test_single_day_entry_has_matching_start_and_end_date(client, make_user):
+    alice = make_user("alice")
+    res = _create_entry(client, alice["headers"], start_date="2026-03-01")
+    assert res.status_code == 201
+    body = res.json()
+    assert body["start_date"] == "2026-03-01"
+    assert body["end_date"] == "2026-03-01"
+
+
+def test_multi_day_entry_stores_distinct_start_and_end_date(client, make_user):
+    alice = make_user("alice")
+    res = _create_entry(client, alice["headers"], start_date="2026-03-01", end_date="2026-03-04")
+    assert res.status_code == 201
+    body = res.json()
+    assert body["start_date"] == "2026-03-01"
+    assert body["end_date"] == "2026-03-04"
+
+
+def test_end_date_before_start_date_rejected(client, make_user):
+    alice = make_user("alice")
+    res = _create_entry(client, alice["headers"], start_date="2026-03-04", end_date="2026-03-01")
+    assert res.status_code == 422
+
+
+# --- Co-authors ----------------------------------------------------------
+
+
+def test_create_entry_with_coauthor(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    res = _create_entry(client, alice["headers"], coauthor_usernames=["bob"])
+    assert res.status_code == 201
+    coauthors = res.json()["coauthors"]
+    assert [c["id"] for c in coauthors] == [bob["id"]]
+
+
+def test_create_entry_with_unknown_coauthor_rejected(client, make_user):
+    alice = make_user("alice")
+    res = _create_entry(client, alice["headers"], coauthor_usernames=["ghost"])
+    assert res.status_code == 422
+
+
+def test_create_entry_listing_self_as_coauthor_is_dropped(client, make_user):
+    alice = make_user("alice")
+    res = _create_entry(client, alice["headers"], coauthor_usernames=["alice"])
+    assert res.status_code == 201
+    assert res.json()["coauthors"] == []
+
+
+def test_coauthor_can_view_private_entry(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    entry_id = _create_entry(client, alice["headers"], is_public=False, coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.get(f"/api/entries/{entry_id}", headers=bob["headers"])
+    assert res.status_code == 200
+
+
+def test_coauthor_sees_private_entry_in_list(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    _create_entry(client, alice["headers"], is_public=False, playlist_id="shared", coauthor_usernames=["bob"])
+
+    res = client.get("/api/entries", headers=bob["headers"])
+    assert "shared" in {e["playlist_id"] for e in res.json()}
+
+
+def test_non_coauthor_still_gets_404_on_private_entry(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    carol = make_user("carol")
+    entry_id = _create_entry(client, alice["headers"], is_public=False, coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.get(f"/api/entries/{entry_id}", headers=carol["headers"])
+    assert res.status_code == 404
+
+
+def test_coauthor_can_edit_text(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    entry_id = _create_entry(client, alice["headers"], text="original", coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.patch(f"/api/entries/{entry_id}", headers=bob["headers"], json={"text": "bob added something"})
+    assert res.status_code == 200
+    assert res.json()["text"] == "bob added something"
+
+
+def test_coauthor_cannot_change_visibility(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    entry_id = _create_entry(client, alice["headers"], is_public=False, coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.patch(f"/api/entries/{entry_id}", headers=bob["headers"], json={"is_public": True})
+    assert res.status_code == 403
+
+
+def test_coauthor_cannot_manage_coauthors(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    make_user("carol")
+    entry_id = _create_entry(client, alice["headers"], coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.patch(
+        f"/api/entries/{entry_id}", headers=bob["headers"], json={"coauthor_usernames": ["bob", "carol"]}
+    )
+    assert res.status_code == 403
+
+
+def test_coauthor_cannot_delete_entry(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    entry_id = _create_entry(client, alice["headers"], coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.delete(f"/api/entries/{entry_id}", headers=bob["headers"])
+    assert res.status_code == 403
+
+
+def test_owner_can_update_coauthor_list(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    carol = make_user("carol")
+    entry_id = _create_entry(client, alice["headers"], coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.patch(
+        f"/api/entries/{entry_id}", headers=alice["headers"], json={"coauthor_usernames": ["carol"]}
+    )
+    assert res.status_code == 200
+    assert [c["id"] for c in res.json()["coauthors"]] == [carol["id"]]
+
+    # bob was removed, so he loses view access to what is still a private entry
+    res = client.get(f"/api/entries/{entry_id}", headers=bob["headers"])
+    assert res.status_code == 404
+
+
+def test_owner_can_clear_coauthor_list(client, make_user):
+    alice = make_user("alice")
+    make_user("bob")
+    entry_id = _create_entry(client, alice["headers"], coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.patch(f"/api/entries/{entry_id}", headers=alice["headers"], json={"coauthor_usernames": []})
+    assert res.status_code == 200
+    assert res.json()["coauthors"] == []
+
+
+def test_add_images_by_coauthor_succeeds(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    entry_id = _create_entry(client, alice["headers"], coauthor_usernames=["bob"]).json()["id"]
+
+    res = client.post(
+        f"/api/entries/{entry_id}/images",
+        headers=bob["headers"],
+        files=[("images", ("photo.png", b"fake image bytes", "image/png"))],
+    )
+    assert res.status_code == 201
+    filenames = [img["filename"] for img in res.json()["images"]]
+    assert len(filenames) == 1
+    for name in filenames:
+        (UPLOADS_DIR / name).unlink(missing_ok=True)
+
+
+def test_add_images_by_non_editor_forbidden(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    entry_id = _create_entry(client, alice["headers"], is_public=True).json()["id"]
+
+    res = client.post(
+        f"/api/entries/{entry_id}/images",
+        headers=bob["headers"],
+        files=[("images", ("photo.png", b"fake image bytes", "image/png"))],
+    )
+    assert res.status_code == 403
+
+
+def test_add_images_requires_auth(client, make_user):
+    alice = make_user("alice")
+    entry_id = _create_entry(client, alice["headers"], is_public=True).json()["id"]
+
+    res = client.post(
+        f"/api/entries/{entry_id}/images",
+        files=[("images", ("photo.png", b"fake image bytes", "image/png"))],
+    )
+    assert res.status_code == 401
+
+
+# --- Visibility (ownership, unrelated to co-authors) ---------------------
 
 
 def test_list_entries_anonymous_sees_only_public(client, make_user):
@@ -248,7 +454,7 @@ def test_create_entry_with_image_upload(client, make_user):
         "/api/entries",
         headers=alice["headers"],
         data={
-            "entry_date": "2026-01-01",
+            "start_date": "2026-01-01",
             "text": "with photo",
             "playlist_id": "p1",
             "playlist_name": "Test",
@@ -273,7 +479,7 @@ def test_delete_entry_removes_uploaded_images(client, make_user):
         "/api/entries",
         headers=alice["headers"],
         data={
-            "entry_date": "2026-01-01",
+            "start_date": "2026-01-01",
             "playlist_id": "p1",
             "playlist_name": "Test",
             "playlist_url": "https://open.spotify.com/playlist/p1",
