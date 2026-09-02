@@ -69,3 +69,55 @@ def test_me_returns_current_user(client, make_user):
     res = client.get("/api/users/me", headers=user["headers"])
     assert res.status_code == 200
     assert res.json()["username"] == "alice"
+
+
+# --- User search (co-author picker) --------------------------------------
+
+
+def test_search_requires_auth(client, make_user):
+    make_user("alice")
+    res = client.get("/api/users?q=ali")
+    assert res.status_code == 401
+
+
+def test_search_finds_partial_username_match(client, make_user):
+    make_user("alice")
+    bob = make_user("bob")
+
+    res = client.get("/api/users?q=ali", headers=bob["headers"])
+    assert res.status_code == 200
+    usernames = [u["username"] for u in res.json()]
+    assert usernames == ["alice"]
+
+
+def test_search_excludes_self(client, make_user):
+    alice = make_user("alice")
+    make_user("alicia")
+
+    res = client.get("/api/users?q=ali", headers=alice["headers"])
+    usernames = {u["username"] for u in res.json()}
+    assert usernames == {"alicia"}
+
+
+def test_search_does_not_leak_email(client, make_user):
+    make_user("alice")
+    bob = make_user("bob")
+
+    res = client.get("/api/users?q=ali", headers=bob["headers"])
+    assert res.status_code == 200
+    for user in res.json():
+        assert "email" not in user
+        assert set(user.keys()) == {"id", "username"}
+
+
+def test_search_no_match_returns_empty_list(client, make_user):
+    alice = make_user("alice")
+    res = client.get("/api/users?q=nonexistent-xyz", headers=alice["headers"])
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_search_requires_nonempty_query(client, make_user):
+    alice = make_user("alice")
+    res = client.get("/api/users?q=", headers=alice["headers"])
+    assert res.status_code == 422

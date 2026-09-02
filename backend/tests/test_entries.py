@@ -84,6 +84,16 @@ def test_end_date_before_start_date_rejected(client, make_user):
     assert res.status_code == 422
 
 
+def test_end_date_explicitly_equal_to_start_date_is_accepted(client, make_user):
+    """The end_date < start_date guard is a strict '<', so the boundary case
+    of an explicitly-passed equal end_date must not be rejected."""
+    alice = make_user("alice")
+    res = _create_entry(client, alice["headers"], start_date="2026-03-04", end_date="2026-03-04")
+    assert res.status_code == 201
+    body = res.json()
+    assert body["start_date"] == body["end_date"] == "2026-03-04"
+
+
 # --- Co-authors ----------------------------------------------------------
 
 
@@ -96,9 +106,28 @@ def test_create_entry_with_coauthor(client, make_user):
     assert [c["id"] for c in coauthors] == [bob["id"]]
 
 
+def test_create_entry_with_multiple_coauthors(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    carol = make_user("carol")
+    res = _create_entry(client, alice["headers"], coauthor_usernames=["bob", "carol"])
+    assert res.status_code == 201
+    coauthor_ids = {c["id"] for c in res.json()["coauthors"]}
+    assert coauthor_ids == {bob["id"], carol["id"]}
+
+
 def test_create_entry_with_unknown_coauthor_rejected(client, make_user):
     alice = make_user("alice")
     res = _create_entry(client, alice["headers"], coauthor_usernames=["ghost"])
+    assert res.status_code == 422
+
+
+def test_create_entry_with_unknown_coauthor_among_valid_ones_rejects_whole_request(client, make_user):
+    """An unknown username anywhere in the list must fail the entire create,
+    not silently drop just the bad one."""
+    alice = make_user("alice")
+    make_user("bob")
+    res = _create_entry(client, alice["headers"], coauthor_usernames=["bob", "ghost"])
     assert res.status_code == 422
 
 
@@ -107,6 +136,15 @@ def test_create_entry_listing_self_as_coauthor_is_dropped(client, make_user):
     res = _create_entry(client, alice["headers"], coauthor_usernames=["alice"])
     assert res.status_code == 201
     assert res.json()["coauthors"] == []
+
+
+def test_create_entry_coauthor_usernames_with_whitespace_and_duplicates(client, make_user):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    res = _create_entry(client, alice["headers"], coauthor_usernames=["bob", " bob ", "bob"])
+    assert res.status_code == 201
+    coauthor_ids = [c["id"] for c in res.json()["coauthors"]]
+    assert coauthor_ids == [bob["id"]]
 
 
 def test_coauthor_can_view_private_entry(client, make_user):
@@ -219,6 +257,16 @@ def test_add_images_by_coauthor_succeeds(client, make_user):
     assert len(filenames) == 1
     for name in filenames:
         (UPLOADS_DIR / name).unlink(missing_ok=True)
+
+
+def test_add_images_to_nonexistent_entry_returns_404(client, make_user):
+    alice = make_user("alice")
+    res = client.post(
+        "/api/entries/999999/images",
+        headers=alice["headers"],
+        files=[("images", ("photo.png", b"fake image bytes", "image/png"))],
+    )
+    assert res.status_code == 404
 
 
 def test_add_images_by_non_editor_forbidden(client, make_user):
