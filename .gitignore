@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 *.pyc
 .DS_Store
+backend/musical_memories.db
+backend/uploads/*
+!backend/uploads/.gitkeep
+frontend/dist/
