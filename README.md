@@ -1,21 +1,31 @@
 # Musical Memories
 
-A local, multi-user journal that ties entries — a date (or date range), a
-note, optional photos — to a Spotify playlist. The music side of an entry is
-always a playlist, even when it's really just one song (make a single-track
-playlist in Spotify for that case). Each entry is private by default and can
-be made public; the entry list shows everyone's public entries plus your own
-private ones and any private entries you're a co-author on.
+A multi-tenant journal that ties entries — a date (or date range), a note,
+optional photos — to a Spotify playlist. The music side of an entry is
+always a playlist, even when it's really just one song (make a
+single-track playlist in Spotify for that case).
+
+Entries live in **workspaces** — separate, isolated groups (e.g. one
+family's journal vs. a friend group's). A user account can belong to
+several workspaces at once (a switcher, not a single fixed group per
+account); the app UI lets you pick which one is active. Within a
+workspace, each entry is private by default and can be made public;
+"public" means visible to every member of that entry's workspace, not the
+whole app. The entry list shows every public entry in the active
+workspace plus your own private ones there and any private ones you're a
+co-author on.
 
 Each entry has one primary author (who can toggle public/private, manage
 co-authors, and delete it) and any number of co-authors (who can edit the
 text, tags, and photos, same as the primary author, but not change
-visibility, manage co-authors, or delete). A single-day entry has its start
-and end date equal; the frontend collapses that to one displayed date
-instead of a range.
+visibility, manage co-authors, or delete) - co-authors must already be
+members of the entry's workspace. A single-day entry has its start and end
+date equal; the frontend collapses that to one displayed date instead of a
+range.
 
-Entries can carry free-text tags, and both entry text and tags are indexed
-for full-text search.
+Entries can carry free-text tags (unique per workspace, not globally), and
+both entry text and tags are indexed for full-text search within a
+workspace.
 
 ## Stack
 
@@ -47,12 +57,47 @@ Run that again any time you pull a change that adds a migration. Schema is
 owned entirely by Alembic now - the app no longer auto-creates tables on
 startup.
 
+## Workspaces
+
+`Workspace`: id, name, created_at, created_by. Membership is a separate
+table with a role - `owner` (created it; can invite/remove members and
+delete the workspace) or `member` (everything else: create entries,
+comment, etc.) - the same owner/member asymmetry already used for an
+entry's primary author vs. co-authors.
+
+Endpoints: `POST /api/workspaces` (create - you become its owner),
+`GET /api/workspaces` (list your own, with your role in each),
+`GET /api/workspaces/{id}/members`, `POST /api/workspaces/{id}/members`
+(owner-only, add an existing user by username - a stand-in for a real
+invite flow; there's no email-based invite, verification, or password
+reset yet), `DELETE /api/workspaces/{id}/members/{user_id}` (owner-only;
+the owner can't remove themselves this way - delete the whole workspace
+instead), `DELETE /api/workspaces/{id}` (owner-only, cascades to every
+entry/tag/comment in it).
+
+Every entry/tag/comment/search endpoint is nested under the workspace:
+`GET/POST /api/workspaces/{id}/entries`, `GET/PATCH/DELETE
+/api/workspaces/{id}/entries/{entry_id}`, `GET/POST
+/api/workspaces/{id}/entries/{entry_id}/comments`, etc. (see "API" below).
+A workspace you're not a member of is indistinguishable from one that
+doesn't exist - every one of these routes 404s rather than 403s, the same
+non-disclosure rule already used for a private entry you can't see.
+
+**Upgrading an existing installation:** migration `0005` creates one
+"Default" workspace, adds every existing user as a member of it (the
+earliest-registered user becomes its owner, everyone else a member), and
+re-points every existing entry and tag at it. A pre-existing public entry
+keeps exactly the visibility it had before - every user who could already
+see it is now a member of the one workspace holding it.
+
 ## Full-text search and tags
 
 Entries can have any number of free-text tags (typing a new one creates it;
-typing an existing one reuses it). `GET /api/entries` accepts two optional
-query params, and both respect the normal entry visibility rule (public
-entries, plus your own private ones, plus private ones you co-author):
+typing an existing one reuses it), unique per workspace - two different
+workspaces can each have their own "roadtrip" tag. `GET
+/api/workspaces/{id}/entries` accepts two optional query params, both
+respecting the normal entry visibility rule (public entries in this
+workspace, plus your own private ones, plus private ones you co-author):
 
 - `q=<text>` — full-text search across entry text and tag names, using
   Postgres's native `tsvector`/`websearch_to_tsquery` (not `ILIKE`),
@@ -61,8 +106,8 @@ entries, plus your own private ones, plus private ones you co-author):
   or tags change, and is backed by a GIN index.
 - `tag=<name>` — filter to entries carrying that exact tag.
 
-`GET /api/entries/tags` lists every tag currently in use across entries
-visible to the caller, for autocomplete.
+`GET /api/workspaces/{id}/entries/tags` lists every tag currently in use in
+that workspace, across entries visible to the caller, for autocomplete.
 
 ## Spotify API
 
@@ -77,7 +122,8 @@ to `backend/.env` and fill in `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`.
 Separately, a logged-in user can link their own Spotify account (Authorization
 Code flow) to browse their own playlists from the entry form's "My playlists"
 tab. This is additive on top of local login - it does not replace or change
-how you sign in to this app.
+how you sign in to this app, and it's not workspace-scoped (your linked
+Spotify account is yours across every workspace you belong to).
 
 To enable it:
 
@@ -93,8 +139,9 @@ To enable it:
 Endpoints: `GET /api/spotify/connect` (starts the flow; requires your local
 JWT), `GET /api/spotify/callback` (Spotify's own redirect target - not
 something you call directly), `GET /api/spotify/status`, and
-`GET /api/spotify/me/playlists`. The linked access/refresh tokens are stored
-server-side and refreshed automatically when expired; they're never
+`GET /api/spotify/me/playlists`. The linked access/refresh tokens are
+encrypted at rest (see "Security and operations" below), stored
+server-side, and refreshed automatically when expired; they're never
 returned in any API response.
 
 ## Auth
@@ -111,18 +158,53 @@ python -c "import secrets; print(secrets.token_hex(32))"
 Register via `POST /api/users`, log in via `POST /api/sessions` (returns a
 bearer token), send it as `Authorization: Bearer <token>` on subsequent
 requests. The frontend's login/register screen handles this for you and
-persists the token in the browser.
+persists the token in the browser. Both endpoints are rate-limited to 5
+attempts/minute per caller IP (see "Security and operations").
+
+## Security and operations
+
+- **Spotify tokens encrypted at rest** — `SpotifyToken.access_token`/
+  `refresh_token` are encrypted in Postgres (Fernet), keyed by
+  `TOKEN_ENCRYPTION_KEY` in `backend/.env` - required, generate one with:
+  ```
+  python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  ```
+  (this is a different key format than `JWT_SECRET_KEY` - don't reuse the
+  `secrets.token_hex` command for it).
+- **Rate limiting** — `POST /api/sessions` and `POST /api/users` are
+  limited to 5 attempts/minute per caller IP, to blunt brute-forcing and
+  credential stuffing. Returns `429` with a `{"detail": "..."}` body.
+- **Error tracking (optional)** — set `SENTRY_DSN` in `backend/.env` and/or
+  `VITE_SENTRY_DSN` in `frontend/.env` to send errors to Sentry. Leaving
+  either unset is a complete no-op, not a startup failure - there's no
+  Sentry account configured by default.
+- **Structured logging** — the backend logs auth failures/successes,
+  Spotify API calls (catalog search and the per-user OAuth client - query,
+  cache hit/miss, result counts, refresh events), and other operationally
+  relevant events via Python's standard `logging`, not prints. Verbosity is
+  controlled by `LOG_LEVEL` in `backend/.env` (default `INFO`).
 
 ## API
 
 REST resources: `POST /api/users` (register), `GET /api/users/me`,
-`GET /api/users?q=` (username search, for picking co-authors),
-`POST /api/sessions` (login), `GET/POST /api/entries` (optional `q=`/`tag=`
-on GET), `GET/PATCH/DELETE /api/entries/{id}`,
-`POST /api/entries/{id}/images` (add photos to an existing entry),
-`GET /api/entries/tags` (tags in use), `GET /api/spotify/playlists?q=`
-(public catalog search), and the Spotify account-linking endpoints
-described above.
+`GET /api/users?q=` (global username search), `POST /api/sessions`
+(login).
+
+Workspaces: `POST/GET /api/workspaces`, `GET/POST /api/workspaces/{id}/members`,
+`DELETE /api/workspaces/{id}/members/{user_id}`, `DELETE /api/workspaces/{id}`.
+
+Workspace-scoped (see "Workspaces" above - every one of these requires
+membership in `{id}`): `GET/POST /api/workspaces/{id}/entries` (optional
+`q=`/`tag=` on GET), `GET/PATCH/DELETE /api/workspaces/{id}/entries/{entry_id}`,
+`POST /api/workspaces/{id}/entries/{entry_id}/images` (add photos to an
+existing entry), `GET /api/workspaces/{id}/entries/tags` (tags in use),
+`GET/POST /api/workspaces/{id}/entries/{entry_id}/comments`.
+
+Not workspace-nested (the id alone is enough to resolve which workspace
+applies, via the comment's own entry): `PATCH/DELETE /api/comments/{id}`.
+
+Spotify: `GET /api/spotify/playlists?q=` (public catalog search) and the
+account-linking endpoints described above.
 
 ## Running locally
 

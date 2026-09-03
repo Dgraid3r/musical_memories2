@@ -7,6 +7,7 @@ import TagInput from './TagInput'
 
 interface Props {
   entry: JournalEntry
+  workspaceId: number
   onDelete: (id: number) => void
   onUpdated: (entry: JournalEntry) => void
 }
@@ -23,7 +24,7 @@ function formatDateRange(startDate: string, endDate: string): string {
   return startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} – ${formatDate(endDate)}`
 }
 
-export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
+export default function EntryCard({ entry, workspaceId, onDelete, onUpdated }: Props) {
   const { user, token } = useAuth()
   const [togglingVisibility, setTogglingVisibility] = useState(false)
   const [addingPhotos, setAddingPhotos] = useState(false)
@@ -38,7 +39,7 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
     if (!token) return
     setTogglingVisibility(true)
     try {
-      const updated = await updateEntry(entry.id, { is_public: !entry.is_public }, token)
+      const updated = await updateEntry(workspaceId, entry.id, { is_public: !entry.is_public }, token)
       onUpdated(updated)
     } finally {
       setTogglingVisibility(false)
@@ -54,7 +55,7 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
     if (!token) return
     setSavingTags(true)
     try {
-      const updated = await updateEntry(entry.id, { tags: draftTags }, token)
+      const updated = await updateEntry(workspaceId, entry.id, { tags: draftTags }, token)
       onUpdated(updated)
       setEditingTags(false)
     } finally {
@@ -68,7 +69,7 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
     if (!token || files.length === 0) return
     setAddingPhotos(true)
     try {
-      const updated = await addImages(entry.id, files, token)
+      const updated = await addImages(workspaceId, entry.id, files, token)
       onUpdated(updated)
     } finally {
       setAddingPhotos(false)
@@ -104,7 +105,7 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
 
       {editingTags ? (
         <div className="tag-edit">
-          <TagInput selected={draftTags} onChange={setDraftTags} />
+          <TagInput workspaceId={workspaceId} selected={draftTags} onChange={setDraftTags} />
           <div className="tag-edit-actions">
             <button type="button" onClick={saveTags} disabled={savingTags}>
               {savingTags ? 'Saving...' : 'Save tags'}
@@ -156,7 +157,7 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
         loading="lazy"
       />
 
-      <CommentThread entryId={entry.id} entryOwnerId={entry.user_id} />
+      <CommentThread workspaceId={workspaceId} entryId={entry.id} entryOwnerId={entry.user_id} />
     </article>
   )
 }

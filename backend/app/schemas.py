@@ -31,6 +31,7 @@ class JournalEntryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    workspace_id: int
     user_id: int
     owner_username: str
     coauthors: list[UserPublic]
@@ -132,3 +133,28 @@ class SpotifyStatusOut(BaseModel):
 
 class SpotifyConnectOut(BaseModel):
     authorize_url: str
+
+
+class WorkspaceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class WorkspaceOut(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    created_by: int
+    # The caller's own role in this workspace - not a Workspace column, so
+    # this model is always constructed explicitly rather than via
+    # from_attributes off the ORM object alone.
+    role: str
+
+
+class WorkspaceMemberAdd(BaseModel):
+    username: str
+
+
+class WorkspaceMemberOut(BaseModel):
+    user_id: int
+    username: str
+    role: str

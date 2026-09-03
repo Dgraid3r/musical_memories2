@@ -15,6 +15,7 @@ export interface Tag {
 
 export interface JournalEntry {
   id: number
+  workspace_id: number
   user_id: number
   owner_username: string
   coauthors: UserPublic[]
@@ -57,4 +58,19 @@ export interface Comment {
   created_at: string
   edited_at: string | null
   replies: Comment[]
+}
+
+export interface Workspace {
+  id: number
+  name: string
+  created_at: string
+  created_by: number
+  // The caller's own role in this workspace: "owner" or "member".
+  role: string
+}
+
+export interface WorkspaceMember {
+  user_id: number
+  username: string
+  role: string
 }

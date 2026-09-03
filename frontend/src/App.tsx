@@ -6,7 +6,9 @@ import EntryCard from './components/EntryCard'
 import NewEntryForm from './components/NewEntryForm'
 import SearchBar from './components/SearchBar'
 import SpotifyConnect from './components/SpotifyConnect'
+import WorkspaceSwitcher from './components/WorkspaceSwitcher'
 import type { JournalEntry } from './types'
+import { useWorkspace } from './workspace/WorkspaceContext'
 import './App.css'
 
 function useSpotifyCallbackNotice(): string | null {
@@ -32,6 +34,7 @@ function useSpotifyCallbackNotice(): string | null {
 
 export default function App() {
   const { user, token, loading: authLoading, logout } = useAuth()
+  const { activeWorkspace, loading: workspaceLoading, error: workspaceError } = useWorkspace()
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -39,17 +42,17 @@ export default function App() {
   const spotifyNotice = useSpotifyCallbackNotice()
 
   useEffect(() => {
-    if (authLoading) return
+    if (authLoading || !activeWorkspace) return
     setLoading(true)
-    fetchEntries(token, { q: searchQuery || undefined })
+    fetchEntries(activeWorkspace.id, token, { q: searchQuery || undefined })
       .then(setEntries)
       .catch(() => setError('Could not load memories.'))
       .finally(() => setLoading(false))
-  }, [token, authLoading, searchQuery])
+  }, [token, authLoading, activeWorkspace, searchQuery])
 
   async function handleDelete(id: number) {
-    if (!token) return
-    await deleteEntry(id, token)
+    if (!token || !activeWorkspace) return
+    await deleteEntry(activeWorkspace.id, id, token)
     setEntries((prev) => prev.filter((e) => e.id !== id))
   }
 
@@ -68,6 +71,7 @@ export default function App() {
           <p>Journal entries tied to the playlists that go with them.</p>
         </div>
         <div className="account-bar">
+          <WorkspaceSwitcher />
           <span>{user.username}</span>
           <SpotifyConnect />
           <button type="button" className="link-btn" onClick={logout}>
@@ -79,23 +83,44 @@ export default function App() {
       {spotifyNotice && <p className="hint spotify-notice">{spotifyNotice}</p>}
 
       <main>
-        <NewEntryForm onCreated={(entry) => setEntries((prev) => (searchQuery ? prev : [entry, ...prev]))} />
+        {workspaceLoading && <p>Loading workspaces...</p>}
+        {!workspaceLoading && workspaceError && <p className="error">{workspaceError}</p>}
+        {!workspaceLoading && !workspaceError && !activeWorkspace && (
+          <p className="hint">
+            You don't belong to a workspace yet - create one above to start adding memories.
+          </p>
+        )}
 
-        <SearchBar onSearch={setSearchQuery} />
+        {activeWorkspace && (
+          <>
+            <NewEntryForm
+              workspaceId={activeWorkspace.id}
+              onCreated={(entry) => setEntries((prev) => (searchQuery ? prev : [entry, ...prev]))}
+            />
 
-        <section className="entry-list">
-          {loading && <p>Loading...</p>}
-          {error && <p className="error">{error}</p>}
-          {!loading && !error && entries.length === 0 && searchQuery && (
-            <p className="hint">No memories match "{searchQuery}".</p>
-          )}
-          {!loading && !error && entries.length === 0 && !searchQuery && (
-            <p className="hint">No memories yet — add your first one above.</p>
-          )}
-          {entries.map((entry) => (
-            <EntryCard key={entry.id} entry={entry} onDelete={handleDelete} onUpdated={handleUpdated} />
-          ))}
-        </section>
+            <SearchBar onSearch={setSearchQuery} />
+
+            <section className="entry-list">
+              {loading && <p>Loading...</p>}
+              {error && <p className="error">{error}</p>}
+              {!loading && !error && entries.length === 0 && searchQuery && (
+                <p className="hint">No memories match "{searchQuery}".</p>
+              )}
+              {!loading && !error && entries.length === 0 && !searchQuery && (
+                <p className="hint">No memories yet — add your first one above.</p>
+              )}
+              {entries.map((entry) => (
+                <EntryCard
+                  key={entry.id}
+                  entry={entry}
+                  workspaceId={activeWorkspace.id}
+                  onDelete={handleDelete}
+                  onUpdated={handleUpdated}
+                />
+              ))}
+            </section>
+          </>
+        )}
       </main>
     </div>
   )

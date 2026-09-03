@@ -15,6 +15,7 @@ and are never returned in any API response - only a connected/not-connected
 boolean ever leaves the server.
 """
 
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -24,6 +25,8 @@ from spotipy.cache_handler import MemoryCacheHandler
 
 from .models import SpotifyToken
 from .schemas import PlaylistResult
+
+logger = logging.getLogger(__name__)
 
 SCOPE = "playlist-read-private playlist-read-collaborative"
 
@@ -61,7 +64,13 @@ def build_authorize_url(state: str) -> str:
 def exchange_code_for_tokens(code: str) -> dict:
     """Returns spotipy's token-info dict: access_token, refresh_token,
     expires_in/expires_at, scope, token_type."""
-    return _oauth_manager().get_access_token(code, as_dict=True, check_cache=False)
+    try:
+        token_info = _oauth_manager().get_access_token(code, as_dict=True, check_cache=False)
+    except Exception:
+        logger.exception("spotify.oauth_exchange failed")
+        raise
+    logger.info("spotify.oauth_exchange succeeded scope=%r", token_info.get("scope"))
+    return token_info
 
 
 def _token_expiry_from_token_info(token_info: dict) -> datetime:
@@ -87,9 +96,15 @@ def ensure_fresh_access_token(token: SpotifyToken) -> str:
     the passed-in ORM object."""
     now = datetime.utcnow()
     if token.expires_at > now + timedelta(seconds=30):
+        logger.info("spotify.token_refresh user_id=%s needed=false", token.user_id)
         return token.access_token
 
-    refreshed = _oauth_manager().refresh_access_token(token.refresh_token)
+    logger.info("spotify.token_refresh user_id=%s needed=true", token.user_id)
+    try:
+        refreshed = _oauth_manager().refresh_access_token(token.refresh_token)
+    except Exception:
+        logger.exception("spotify.token_refresh user_id=%s failed", token.user_id)
+        raise
     token.access_token = refreshed["access_token"]
     # Spotify doesn't always rotate the refresh token - keep the old one if
     # a new one wasn't issued.
@@ -106,7 +121,11 @@ def get_user_playlists(access_token: str) -> list[PlaylistResult]:
     spotify_client.py, authorized with this specific user's access token
     rather than app-only client credentials."""
     sp = spotipy.Spotify(auth=access_token)
-    results = sp.current_user_playlists(limit=50)
+    try:
+        results = sp.current_user_playlists(limit=50)
+    except Exception:
+        logger.exception("spotify.my_playlists failed")
+        raise
     items = results.get("items", []) if results else []
 
     playlists: list[PlaylistResult] = []
@@ -124,4 +143,5 @@ def get_user_playlists(access_token: str) -> list[PlaylistResult]:
                 track_count=(item.get("tracks") or {}).get("total", 0),
             )
         )
+    logger.info("spotify.my_playlists succeeded results=%d", len(playlists))
     return playlists

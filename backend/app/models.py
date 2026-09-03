@@ -12,11 +12,13 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     event,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from .crypto import EncryptedString
 from .database import Base
 
 entry_coauthors = Table(
@@ -49,16 +51,68 @@ class User(Base):
     spotify_token: Mapped["SpotifyToken | None"] = relationship(
         back_populates="user", cascade="all, delete-orphan", uselist=False
     )
+    # A user can belong to several workspaces at once (a switcher, not a
+    # single fixed group per account) - this is the join table that makes
+    # that possible.
+    memberships: Mapped[list["WorkspaceMembership"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class Workspace(Base):
+    """An isolated group - e.g. one family's journal vs. a friend group's.
+    Entries and tags belong to exactly one workspace; a user can belong to
+    several workspaces via WorkspaceMembership."""
+
+    __tablename__ = "workspaces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    creator: Mapped["User"] = relationship(foreign_keys=[created_by])
+    memberships: Mapped[list["WorkspaceMembership"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+    entries: Mapped[list["JournalEntry"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    tags: Mapped[list["Tag"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+
+
+class WorkspaceMembership(Base):
+    """One user's membership in one workspace, with a role - the same
+    owner/member asymmetry already used for an entry's primary author vs.
+    co-authors: "owner" created the workspace and can invite/remove members
+    and delete the workspace; "member" can do everything else (create
+    entries, comment, etc.)."""
+
+    __tablename__ = "workspace_memberships"
+    __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_membership"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String, nullable=False, default="member")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="memberships")
+    user: Mapped["User"] = relationship(back_populates="memberships")
 
 
 class Tag(Base):
     __tablename__ = "tags"
+    __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_tag_workspace_name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), nullable=False, index=True)
     # Stored lowercase/trimmed so "Road Trip" and "road trip" collapse to one
-    # tag; the router owns normalization on the way in.
-    name: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    # tag; the router owns normalization on the way in. Unique per workspace
+    # (not globally) - otherwise autocomplete would leak tag names across
+    # unrelated workspaces, and two workspaces couldn't each have their own
+    # "roadtrip" tag.
+    name: Mapped[str] = mapped_column(String, nullable=False, index=True)
 
+    workspace: Mapped["Workspace"] = relationship(back_populates="tags")
     entries: Mapped[list["JournalEntry"]] = relationship(secondary=entry_tags, back_populates="tags")
 
 
@@ -66,6 +120,7 @@ class JournalEntry(Base):
     __tablename__ = "journal_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     # A single-day memory has start_date == end_date; the frontend collapses
@@ -74,6 +129,10 @@ class JournalEntry(Base):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
 
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "Public" now means visible to every *member of this entry's
+    # workspace*, not the whole app - workspaces are the isolation boundary,
+    # and every route that can reach an entry already requires workspace
+    # membership first. "Private" is unchanged: owner + co-authors only.
     is_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # The music side of an entry is always a Spotify playlist, even a
@@ -90,10 +149,12 @@ class JournalEntry(Base):
     # the trigger populates it only after the row (and its tags) exist.
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
 
+    workspace: Mapped["Workspace"] = relationship(back_populates="entries")
     owner: Mapped["User"] = relationship(back_populates="entries")
     # Co-authors can edit an entry's content (text, photos) but only the
     # primary author (owner) can change visibility, manage co-authors, or
-    # delete the entry.
+    # delete the entry. Co-authors must already be members of the entry's
+    # workspace - enforced in the router, not here (see entries.py).
     coauthors: Mapped[list["User"]] = relationship(secondary=entry_coauthors)
     images: Mapped[list["EntryImage"]] = relationship(
         back_populates="entry", cascade="all, delete-orphan", order_by="EntryImage.id"
@@ -160,8 +221,11 @@ class SpotifyToken(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, nullable=False, index=True)
-    access_token: Mapped[str] = mapped_column(String, nullable=False)
-    refresh_token: Mapped[str] = mapped_column(String, nullable=False)
+    # Encrypted at rest (see crypto.EncryptedString) - these are someone's
+    # real Spotify credentials. The column stays a plain string type in
+    # Postgres; only the ciphertext is ever stored there.
+    access_token: Mapped[str] = mapped_column(EncryptedString, nullable=False)
+    refresh_token: Mapped[str] = mapped_column(EncryptedString, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     scope: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -98,6 +98,28 @@ def test_callback_success_stores_tokens_and_redirects(client, make_user, db_sess
     assert token.refresh_token == "refresh-1"
 
 
+def test_callback_encrypts_tokens_at_rest(client, make_user, db_session):
+    """The ORM round-trip (as in the test above) would pass even if
+    EncryptedString were accidentally a no-op, since it decrypts on the way
+    back out too - so this reads the raw column value with a plain SQL
+    query, bypassing the ORM's TypeDecorator entirely, to prove the bytes
+    actually stored in Postgres are not the plaintext token."""
+    from sqlalchemy import text
+
+    alice = make_user("alice")
+    state = auth.create_oauth_state(alice["id"])
+
+    with patch("app.routers.spotify.exchange_code_for_tokens", return_value=_fake_token_info(access="raw-secret-access")):
+        client.get(f"/api/spotify/callback?code=abc123&state={state}", follow_redirects=False)
+
+    raw_access_token = db_session.execute(
+        text("SELECT access_token FROM spotify_tokens WHERE user_id = :user_id"), {"user_id": alice["id"]}
+    ).scalar_one()
+
+    assert raw_access_token != "raw-secret-access"
+    assert "raw-secret-access" not in raw_access_token
+
+
 def test_callback_upserts_existing_token(client, make_user, db_session):
     from app.models import SpotifyToken
 
