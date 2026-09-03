@@ -2,13 +2,13 @@ import uuid
 from datetime import date
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import or_, select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
-from ..models import EntryImage, JournalEntry, User
+from ..models import EntryImage, JournalEntry, Tag, User
 from ..schemas import JournalEntryOut, JournalEntryUpdate
 
 router = APIRouter(prefix="/api/entries", tags=["entries"])
@@ -41,6 +41,22 @@ def _visible_or_404(entry: JournalEntry | None, user: User | None) -> JournalEnt
     return entry
 
 
+def _apply_visibility(stmt: Select, current_user: User | None) -> Select:
+    """Public entries from everyone, plus the caller's own private ones and
+    any private entries the caller is a co-author on. Shared by every
+    endpoint that lists or searches entries so the visibility rule is
+    defined in exactly one place."""
+    if current_user is None:
+        return stmt.where(JournalEntry.is_public.is_(True))
+    return stmt.where(
+        or_(
+            JournalEntry.is_public.is_(True),
+            JournalEntry.user_id == current_user.id,
+            JournalEntry.coauthors.any(User.id == current_user.id),
+        )
+    )
+
+
 def _resolve_coauthors(usernames: list[str], db: Session, exclude_user_id: int) -> list[User]:
     unique_usernames = {u.strip() for u in usernames if u.strip()}
     if not unique_usernames:
@@ -52,6 +68,24 @@ def _resolve_coauthors(usernames: list[str], db: Session, exclude_user_id: int) 
     # Silently drop the primary author if they listed themselves - they're
     # already the owner, not a co-author.
     return [u for u in users if u.id != exclude_user_id]
+
+
+def _resolve_tags(names: list[str], db: Session) -> list[Tag]:
+    """Unlike co-authors, tags are get-or-create: any free-text tag name is
+    valid, and typing one for the first time defines it. Names are
+    normalized (trimmed, lowercased) so casing/whitespace variants collapse
+    onto the same tag."""
+    normalized = {n.strip().lower() for n in names if n.strip()}
+    if not normalized:
+        return []
+    existing = db.scalars(select(Tag).where(Tag.name.in_(normalized))).all()
+    existing_names = {t.name for t in existing}
+    new_tags = [Tag(name=name) for name in normalized if name not in existing_names]
+    for tag in new_tags:
+        db.add(tag)
+    if new_tags:
+        db.flush()
+    return list(existing) + new_tags
 
 
 def _save_images(images: list[UploadFile], entry_id: int, db: Session) -> None:
@@ -68,24 +102,43 @@ def _save_images(images: list[UploadFile], entry_id: int, db: Session) -> None:
 
 @router.get("", response_model=list[JournalEntryOut])
 def list_entries(
+    q: str | None = Query(None, min_length=1, description="Full-text search across entry text and tags"),
+    tag: str | None = Query(None, description="Filter to entries carrying this exact tag name"),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
     """Public entries from everyone, plus the caller's own private ones and
-    any private entries the caller is a co-author on."""
-    stmt = select(JournalEntry)
-    if current_user is None:
-        stmt = stmt.where(JournalEntry.is_public.is_(True))
+    any private entries the caller is a co-author on. Optionally narrowed by
+    a full-text search (`q`, matched against entry text and tag names via
+    Postgres tsvector) and/or an exact tag filter (`tag`)."""
+    stmt = _apply_visibility(select(JournalEntry), current_user)
+
+    if tag is not None:
+        stmt = stmt.where(JournalEntry.tags.any(Tag.name == tag.strip().lower()))
+
+    if q is not None:
+        tsquery = func.websearch_to_tsquery("english", q)
+        stmt = stmt.where(JournalEntry.search_vector.op("@@")(tsquery))
+        stmt = stmt.order_by(func.ts_rank(JournalEntry.search_vector, tsquery).desc(), JournalEntry.id.desc())
     else:
-        stmt = stmt.where(
-            or_(
-                JournalEntry.is_public.is_(True),
-                JournalEntry.user_id == current_user.id,
-                JournalEntry.coauthors.any(User.id == current_user.id),
-            )
-        )
-    stmt = stmt.order_by(JournalEntry.start_date.desc(), JournalEntry.id.desc())
+        stmt = stmt.order_by(JournalEntry.start_date.desc(), JournalEntry.id.desc())
+
     return db.scalars(stmt).unique().all()
+
+
+@router.get("/tags", response_model=list[str])
+def list_tags(
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """All tag names in use across entries visible to the caller - the same
+    visibility rule as listing entries, so a tag used only on someone else's
+    private entry doesn't leak here. Used to power tag autocomplete."""
+    # Tag isn't a JournalEntry, so the visibility helper's JournalEntry.*
+    # filters need an explicit join from Tag back to journal_entries.
+    stmt = select(Tag.name).join(Tag.entries)
+    stmt = _apply_visibility(stmt, current_user).distinct().order_by(Tag.name)
+    return db.scalars(stmt).all()
 
 
 @router.get("/{entry_id}", response_model=JournalEntryOut)
@@ -109,6 +162,7 @@ def create_entry(
     playlist_image_url: str | None = Form(None),
     is_public: bool = Form(False),
     coauthor_usernames: list[str] = Form(default=[]),
+    tags: list[str] = Form(default=[]),
     images: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -128,6 +182,7 @@ def create_entry(
         playlist_image_url=playlist_image_url,
         is_public=is_public,
         coauthors=_resolve_coauthors(coauthor_usernames, db, exclude_user_id=current_user.id),
+        tags=_resolve_tags(tags, db),
     )
     db.add(entry)
     db.flush()
@@ -174,6 +229,9 @@ def update_entry(
 
     if payload.text is not None:
         entry.text = payload.text
+
+    if payload.tags is not None:
+        entry.tags = _resolve_tags(payload.tags, db)
 
     # Visibility and co-author management stay primary-author-only, even for
     # a co-author who otherwise has content-edit rights on this entry.

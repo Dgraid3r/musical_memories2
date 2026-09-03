@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import type { JournalEntry, PlaylistResult } from '../types'
 import CoAuthorPicker from './CoAuthorPicker'
 import PlaylistSearch from './PlaylistSearch'
+import TagInput from './TagInput'
 
 interface Props {
   onCreated: (entry: JournalEntry) => void
@@ -21,6 +22,7 @@ export default function NewEntryForm({ onCreated }: Props) {
   const [images, setImages] = useState<File[]>([])
   const [isPublic, setIsPublic] = useState(false)
   const [coauthorUsernames, setCoauthorUsernames] = useState<string[]>([])
+  const [tags, setTags] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -40,7 +42,7 @@ export default function NewEntryForm({ onCreated }: Props) {
     setError(null)
     try {
       const entry = await createEntry(
-        { startDate, endDate: effectiveEndDate, text, playlist, images, isPublic, coauthorUsernames },
+        { startDate, endDate: effectiveEndDate, text, playlist, images, isPublic, coauthorUsernames, tags },
         token,
       )
       onCreated(entry)
@@ -49,6 +51,7 @@ export default function NewEntryForm({ onCreated }: Props) {
       setImages([])
       setIsPublic(false)
       setCoauthorUsernames([])
+      setTags([])
       setStartDate(today())
       setEndDate(today())
       setSpansMultipleDays(false)
@@ -106,6 +109,8 @@ export default function NewEntryForm({ onCreated }: Props) {
       <PlaylistSearch selected={playlist} onSelect={setPlaylist} />
 
       <CoAuthorPicker selected={coauthorUsernames} onChange={setCoauthorUsernames} />
+
+      <TagInput selected={tags} onChange={setTags} />
 
       <label htmlFor="entry-images">Photos</label>
       <input

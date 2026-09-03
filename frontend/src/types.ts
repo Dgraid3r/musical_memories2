@@ -8,6 +8,11 @@ export interface UserPublic {
   username: string
 }
 
+export interface Tag {
+  id: number
+  name: string
+}
+
 export interface JournalEntry {
   id: number
   user_id: number
@@ -23,6 +28,7 @@ export interface JournalEntry {
   playlist_image_url: string | null
   created_at: string
   images: EntryImage[]
+  tags: Tag[]
 }
 
 export interface PlaylistResult {

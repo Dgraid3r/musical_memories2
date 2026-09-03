@@ -12,6 +12,7 @@ from .models import User
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+OAUTH_STATE_EXPIRE_MINUTES = 10
 
 # auto_error=False so anonymous requests reach get_current_user_optional
 # instead of FastAPI short-circuiting with its own 403.
@@ -63,6 +64,39 @@ def get_current_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
     return user
+
+
+def create_oauth_state(user_id: int) -> str:
+    """A short-lived, signed token that carries the authenticated local
+    user's identity through the Spotify authorize redirect. The browser
+    round-trip to Spotify and back can't carry our Authorization header, so
+    /api/spotify/callback identifies the user solely from this token - it
+    must be both tamper-proof (hence signed, not just base64) and
+    short-lived (10 minutes is far more than a real login->authorize->
+    redirect-back takes)."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=OAUTH_STATE_EXPIRE_MINUTES)
+    payload = {"sub": str(user_id), "purpose": "spotify_oauth", "exp": expire}
+    return jwt.encode(payload, _secret_key(), algorithm=ALGORITHM)
+
+
+def verify_oauth_state(state: str) -> int | None:
+    """Returns the user id embedded in a state token from
+    create_oauth_state, or None if it's missing, expired, tampered with, or
+    wasn't actually an oauth-state token (defends against a state value
+    that happens to be some other valid JWT, like an access token)."""
+    try:
+        payload = jwt.decode(state, _secret_key(), algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("purpose") != "spotify_oauth":
+        return None
+    user_id = payload.get("sub")
+    if user_id is None:
+        return None
+    try:
+        return int(user_id)
+    except (TypeError, ValueError):
+        return None
 
 
 def get_current_user_optional(

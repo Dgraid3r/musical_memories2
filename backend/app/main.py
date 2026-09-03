@@ -7,10 +7,11 @@ from fastapi.staticfiles import StaticFiles
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from .database import Base, engine  # noqa: E402  (must load after .env)
-from .routers import entries, sessions, spotify, users  # noqa: E402
+from .routers import entries, sessions, spotify, users  # noqa: E402  (must load after .env)
 
-Base.metadata.create_all(bind=engine)
+# Schema is owned by Alembic now (see backend/alembic/) - run
+# `alembic upgrade head` before starting the app instead of relying on
+# create_all, which doesn't know how to create the search-vector triggers.
 
 app = FastAPI(title="Musical Memories API")
 

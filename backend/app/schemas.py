@@ -20,6 +20,13 @@ class UserPublic(BaseModel):
     username: str
 
 
+class TagOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+
+
 class JournalEntryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,6 +44,7 @@ class JournalEntryOut(BaseModel):
     playlist_image_url: str | None
     created_at: datetime
     images: list[EntryImageOut]
+    tags: list[TagOut]
 
 
 class JournalEntryUpdate(BaseModel):
@@ -45,6 +53,9 @@ class JournalEntryUpdate(BaseModel):
     # None = leave co-authors unchanged; [] = clear them; only the primary
     # author is allowed to set this (enforced in the router, not here).
     coauthor_usernames: list[str] | None = None
+    # None = leave tags unchanged; [] = clear them. Any co-author may set
+    # this (tags are content, like text), unlike coauthor_usernames.
+    tags: list[str] | None = None
 
 
 class PlaylistResult(BaseModel):
@@ -79,3 +90,14 @@ class LoginInput(BaseModel):
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class SpotifyStatusOut(BaseModel):
+    """Whether the caller has linked a Spotify account. Never includes the
+    stored tokens themselves - those are secrets and never leave the server."""
+
+    connected: bool
+
+
+class SpotifyConnectOut(BaseModel):
+    authorize_url: str

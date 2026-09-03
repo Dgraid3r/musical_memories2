@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { searchPlaylists } from '../api'
+import { fetchMyPlaylists, fetchSpotifyStatus, searchPlaylists } from '../api'
+import { useAuth } from '../auth/AuthContext'
 import type { PlaylistResult } from '../types'
 
 interface Props {
@@ -8,10 +9,22 @@ interface Props {
 }
 
 export default function PlaylistSearch({ selected, onSelect }: Props) {
+  const { token } = useAuth()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PlaylistResult[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [spotifyConnected, setSpotifyConnected] = useState(false)
+  const [showMyPlaylists, setShowMyPlaylists] = useState(false)
+  const [myPlaylists, setMyPlaylists] = useState<PlaylistResult[]>([])
+  const [loadingMyPlaylists, setLoadingMyPlaylists] = useState(false)
+
+  useEffect(() => {
+    if (!token) return
+    fetchSpotifyStatus(token)
+      .then((s) => setSpotifyConnected(s.connected))
+      .catch(() => setSpotifyConnected(false))
+  }, [token])
 
   useEffect(() => {
     if (query.trim().length < 2) {
@@ -29,17 +42,45 @@ export default function PlaylistSearch({ selected, onSelect }: Props) {
     return () => clearTimeout(handle)
   }, [query])
 
+  function toggleMyPlaylists() {
+    const next = !showMyPlaylists
+    setShowMyPlaylists(next)
+    if (next && myPlaylists.length === 0 && token) {
+      setLoadingMyPlaylists(true)
+      fetchMyPlaylists(token)
+        .then(setMyPlaylists)
+        .catch(() => setError('Could not load your Spotify playlists.'))
+        .finally(() => setLoadingMyPlaylists(false))
+    }
+  }
+
+  const listedPlaylists = showMyPlaylists ? myPlaylists : results
+
   return (
     <div className="playlist-search">
       <label htmlFor="playlist-query">Spotify playlist</label>
-      <input
-        id="playlist-query"
-        type="text"
-        placeholder="Search playlists..."
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      {loading && <p className="hint">Searching...</p>}
+
+      {spotifyConnected && (
+        <div className="playlist-source-toggle">
+          <button type="button" className={!showMyPlaylists ? 'active' : ''} onClick={() => setShowMyPlaylists(false)}>
+            Search Spotify
+          </button>
+          <button type="button" className={showMyPlaylists ? 'active' : ''} onClick={toggleMyPlaylists}>
+            My playlists
+          </button>
+        </div>
+      )}
+
+      {!showMyPlaylists && (
+        <input
+          id="playlist-query"
+          type="text"
+          placeholder="Search playlists..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      )}
+      {(loading || loadingMyPlaylists) && <p className="hint">Loading...</p>}
       {error && <p className="error">{error}</p>}
 
       {selected && (
@@ -52,9 +93,9 @@ export default function PlaylistSearch({ selected, onSelect }: Props) {
         </div>
       )}
 
-      {results.length > 0 && (
+      {listedPlaylists.length > 0 && (
         <ul className="playlist-results">
-          {results.map((playlist) => (
+          {listedPlaylists.map((playlist) => (
             <li key={playlist.id}>
               <button type="button" onClick={() => onSelect(playlist)}>
                 {playlist.image_url && <img src={playlist.image_url} alt="" />}
