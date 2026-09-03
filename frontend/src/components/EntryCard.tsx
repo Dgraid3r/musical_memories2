@@ -8,6 +8,13 @@ import TagInput from './TagInput'
 interface Props {
   entry: JournalEntry
   workspaceId: number
+  /** False for a subscriber or a public-browse (read-only) viewer. Entry-
+   * specific owner/co-author actions (toggle visibility, delete, edit
+   * tags, add photos) are already correctly hidden by isOwner/canEditContent
+   * below regardless of this flag - a subscriber can never be an entry's
+   * owner or co-author. This only needs threading through to the comment
+   * thread, which can't tell "can comment" from ownership alone. */
+  canWrite: boolean
   onDelete: (id: number) => void
   onUpdated: (entry: JournalEntry) => void
 }
@@ -24,7 +31,7 @@ function formatDateRange(startDate: string, endDate: string): string {
   return startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} – ${formatDate(endDate)}`
 }
 
-export default function EntryCard({ entry, workspaceId, onDelete, onUpdated }: Props) {
+export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUpdated }: Props) {
   const { user, token } = useAuth()
   const [togglingVisibility, setTogglingVisibility] = useState(false)
   const [addingPhotos, setAddingPhotos] = useState(false)
@@ -157,7 +164,7 @@ export default function EntryCard({ entry, workspaceId, onDelete, onUpdated }: P
         loading="lazy"
       />
 
-      <CommentThread workspaceId={workspaceId} entryId={entry.id} entryOwnerId={entry.user_id} />
+      <CommentThread workspaceId={workspaceId} entryId={entry.id} entryOwnerId={entry.user_id} canWrite={canWrite} />
     </article>
   )
 }

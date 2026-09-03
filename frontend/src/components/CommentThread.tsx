@@ -7,6 +7,9 @@ interface Props {
   workspaceId: number
   entryId: number
   entryOwnerId: number
+  /** False for a subscriber or a public-browse (read-only) viewer - hides
+   * posting/replying, even though they can read every comment. */
+  canWrite: boolean
 }
 
 function insertReply(comments: CommentType[], parentId: number, reply: CommentType): CommentType[] {
@@ -31,8 +34,8 @@ function countComments(comments: CommentType[]): number {
   return comments.reduce((sum, c) => sum + 1 + countComments(c.replies), 0)
 }
 
-export default function CommentThread({ workspaceId, entryId, entryOwnerId }: Props) {
-  const { user, token } = useAuth()
+export default function CommentThread({ workspaceId, entryId, entryOwnerId, canWrite }: Props) {
+  const { token } = useAuth()
   const [expanded, setExpanded] = useState(false)
   const [comments, setComments] = useState<CommentType[]>([])
   const [loading, setLoading] = useState(false)
@@ -108,6 +111,7 @@ export default function CommentThread({ workspaceId, entryId, entryOwnerId }: Pr
                   comment={comment}
                   workspaceId={workspaceId}
                   entryOwnerId={entryOwnerId}
+                  canWrite={canWrite}
                   onReplyPosted={handleReplyPosted}
                   onUpdated={handleUpdated}
                   onDeleted={handleDeleted}
@@ -116,7 +120,7 @@ export default function CommentThread({ workspaceId, entryId, entryOwnerId }: Pr
             </ul>
           )}
 
-          {user && (
+          {canWrite && (
             <form className="comment-form" onSubmit={handlePostTopLevel}>
               <textarea
                 rows={2}
@@ -139,12 +143,13 @@ interface ItemProps {
   comment: CommentType
   workspaceId: number
   entryOwnerId: number
+  canWrite: boolean
   onReplyPosted: (parentId: number, reply: CommentType) => void
   onUpdated: (updated: CommentType) => void
   onDeleted: (commentId: number) => void
 }
 
-function CommentItem({ comment, workspaceId, entryOwnerId, onReplyPosted, onUpdated, onDeleted }: ItemProps) {
+function CommentItem({ comment, workspaceId, entryOwnerId, canWrite, onReplyPosted, onUpdated, onDeleted }: ItemProps) {
   const { user, token } = useAuth()
   const [replying, setReplying] = useState(false)
   const [replyBody, setReplyBody] = useState('')
@@ -230,7 +235,7 @@ function CommentItem({ comment, workspaceId, entryOwnerId, onReplyPosted, onUpda
 
       {!editing && (
         <div className="comment-actions">
-          {user && (
+          {canWrite && (
             <button type="button" className="link-btn" onClick={() => setReplying((r) => !r)}>
               Reply
             </button>
@@ -270,6 +275,7 @@ function CommentItem({ comment, workspaceId, entryOwnerId, onReplyPosted, onUpda
               comment={reply}
               workspaceId={workspaceId}
               entryOwnerId={entryOwnerId}
+              canWrite={canWrite}
               onReplyPosted={onReplyPosted}
               onUpdated={onUpdated}
               onDeleted={onDeleted}

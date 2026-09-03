@@ -4,8 +4,10 @@ import { useAuth } from './auth/AuthContext'
 import AuthForm from './components/AuthForm'
 import EntryCard from './components/EntryCard'
 import NewEntryForm from './components/NewEntryForm'
+import PublicWorkspaceBrowser from './components/PublicWorkspaceBrowser'
 import SearchBar from './components/SearchBar'
 import SpotifyConnect from './components/SpotifyConnect'
+import WorkspaceSettings from './components/WorkspaceSettings'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher'
 import type { JournalEntry } from './types'
 import { useWorkspace } from './workspace/WorkspaceContext'
@@ -39,6 +41,8 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [showPublicBrowser, setShowPublicBrowser] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const spotifyNotice = useSpotifyCallbackNotice()
 
   useEffect(() => {
@@ -61,7 +65,31 @@ export default function App() {
   }
 
   if (authLoading) return null
-  if (!user) return <AuthForm />
+
+  if (showPublicBrowser) {
+    return <PublicWorkspaceBrowser onClose={() => setShowPublicBrowser(false)} />
+  }
+
+  if (!user) {
+    return (
+      <>
+        <AuthForm />
+        <p className="public-browse-link">
+          <button type="button" className="link-btn" onClick={() => setShowPublicBrowser(true)}>
+            Browse public journals without logging in
+          </button>
+        </p>
+      </>
+    )
+  }
+
+  // A subscriber can read everything in the active workspace but can't
+  // create entries, add photos, or comment - the entry-specific
+  // owner/co-author actions inside EntryCard are already correctly hidden
+  // for a subscriber on their own (they can never own or co-author an
+  // entry), so this flag only needs to gate the "new memory" form here and
+  // the comment box inside each EntryCard.
+  const canWrite = activeWorkspace?.role !== 'subscriber'
 
   return (
     <div className="app-shell">
@@ -72,6 +100,14 @@ export default function App() {
         </div>
         <div className="account-bar">
           <WorkspaceSwitcher />
+          {activeWorkspace && (
+            <button type="button" className="link-btn" onClick={() => setShowSettings(true)}>
+              Settings
+            </button>
+          )}
+          <button type="button" className="link-btn" onClick={() => setShowPublicBrowser(true)}>
+            Browse public
+          </button>
           <span>{user.username}</span>
           <SpotifyConnect />
           <button type="button" className="link-btn" onClick={logout}>
@@ -81,6 +117,8 @@ export default function App() {
       </header>
 
       {spotifyNotice && <p className="hint spotify-notice">{spotifyNotice}</p>}
+
+      {showSettings && activeWorkspace && <WorkspaceSettings onClose={() => setShowSettings(false)} />}
 
       <main>
         {workspaceLoading && <p>Loading workspaces...</p>}
@@ -93,10 +131,18 @@ export default function App() {
 
         {activeWorkspace && (
           <>
-            <NewEntryForm
-              workspaceId={activeWorkspace.id}
-              onCreated={(entry) => setEntries((prev) => (searchQuery ? prev : [entry, ...prev]))}
-            />
+            {canWrite && (
+              <NewEntryForm
+                workspaceId={activeWorkspace.id}
+                onCreated={(entry) => setEntries((prev) => (searchQuery ? prev : [entry, ...prev]))}
+              />
+            )}
+            {!canWrite && (
+              <p className="hint subscriber-notice">
+                You're a subscriber here - you can read everything, but only an owner or member can add or edit
+                memories.
+              </p>
+            )}
 
             <SearchBar onSearch={setSearchQuery} />
 
@@ -114,6 +160,7 @@ export default function App() {
                   key={entry.id}
                   entry={entry}
                   workspaceId={activeWorkspace.id}
+                  canWrite={canWrite}
                   onDelete={handleDelete}
                   onUpdated={handleUpdated}
                 />

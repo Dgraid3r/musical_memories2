@@ -1,4 +1,15 @@
-import type { Comment, JournalEntry, PlaylistResult, User, UserPublic, Workspace, WorkspaceMember } from './types'
+import type {
+  Comment,
+  JournalEntry,
+  PlaylistResult,
+  PublicWorkspace,
+  User,
+  UserPublic,
+  Workspace,
+  WorkspaceMember,
+  WorkspaceRole,
+  WorkspaceVisibility,
+} from './types'
 
 export class ApiError extends Error {
   status: number
@@ -78,6 +89,28 @@ export async function deleteWorkspace(workspaceId: number, token: string): Promi
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to delete workspace'))
 }
 
+export async function updateWorkspaceVisibility(
+  workspaceId: number,
+  visibility: WorkspaceVisibility,
+  token: string,
+): Promise<Workspace> {
+  const res = await fetch(`/api/workspaces/${workspaceId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ visibility }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to update workspace visibility'))
+  return res.json()
+}
+
+/** No auth required - public discovery. */
+export async function fetchPublicWorkspaces(q?: string): Promise<PublicWorkspace[]> {
+  const qs = q ? `?q=${encodeURIComponent(q)}` : ''
+  const res = await fetch(`/api/workspaces/public${qs}`)
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load public journals'))
+  return res.json()
+}
+
 export async function fetchWorkspaceMembers(workspaceId: number, token: string): Promise<WorkspaceMember[]> {
   const res = await fetch(`/api/workspaces/${workspaceId}/members`, { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load members'))
@@ -95,6 +128,21 @@ export async function addWorkspaceMember(
     body: JSON.stringify({ username }),
   })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to add member'))
+  return res.json()
+}
+
+export async function updateWorkspaceMemberRole(
+  workspaceId: number,
+  userId: number,
+  role: Extract<WorkspaceRole, 'member' | 'subscriber'>,
+  token: string,
+): Promise<WorkspaceMember> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/members/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ role }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to update member role'))
   return res.json()
 }
 
