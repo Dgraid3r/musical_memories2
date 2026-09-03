@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from .database import Base, engine  # noqa: E402  (must load after .env)
-from .routers import entries, sessions, spotify, users  # noqa: E402
+from .routers import comments, entries, sessions, spotify, users  # noqa: E402
 
 Base.metadata.create_all(bind=engine)
 
@@ -26,6 +26,7 @@ app.mount("/uploads", StaticFiles(directory=Path(__file__).resolve().parent.pare
 app.include_router(users.router)
 app.include_router(sessions.router)
 app.include_router(entries.router)
+app.include_router(comments.router)
 app.include_router(spotify.router)
 
 
