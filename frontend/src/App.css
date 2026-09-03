@@ -366,3 +366,108 @@ body {
   font-size: 0.85rem;
   cursor: pointer;
 }
+
+.comment-thread {
+  border-top: 1px solid #2a2a2a;
+  padding-top: 12px;
+  margin-top: 4px;
+}
+
+.comment-thread-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.comment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comment-list.comment-replies {
+  margin-top: 8px;
+  padding-left: 16px;
+  border-left: 2px solid #2a2a2a;
+}
+
+.comment-item {
+  background: #242424;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.comment-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+
+.comment-meta strong {
+  font-size: 0.85rem;
+}
+
+.comment-time,
+.comment-edited {
+  color: #8a8a8a;
+  font-size: 0.72rem;
+}
+
+.comment-body {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+}
+
+.comment-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 0.78rem;
+}
+
+.comment-edit,
+.comment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.comment-form textarea,
+.comment-edit textarea {
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  color: #f2f2f2;
+  padding: 8px 10px;
+  font: inherit;
+  resize: vertical;
+}
+
+.comment-form button[type='submit'],
+.comment-edit button[type='button']:not(.link-btn) {
+  align-self: flex-end;
+  background: #1db954;
+  color: #000;
+  border: none;
+  border-radius: 16px;
+  padding: 4px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.comment-form button[type='submit']:disabled,
+.comment-edit button[type='button']:not(.link-btn):disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.comment-reply-form {
+  margin-top: 6px;
+}

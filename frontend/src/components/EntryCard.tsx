@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { addImages, updateEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import type { JournalEntry } from '../types'
+import CommentThread from './CommentThread'
 
 interface Props {
   entry: JournalEntry
@@ -104,6 +105,8 @@ export default function EntryCard({ entry, onDelete, onUpdated }: Props) {
         allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
         loading="lazy"
       />
+
+      <CommentThread entryId={entry.id} entryOwnerId={entry.user_id} />
     </article>
   )
 }
