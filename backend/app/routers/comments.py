@@ -8,21 +8,19 @@ from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
 from ..models import Comment, JournalEntry, User
 from ..schemas import CommentCreate, CommentOut, CommentUpdate
-from .entries import _can_view, _is_owner
+from .entries import _can_view, _is_owner, _visible_or_404
 
 router = APIRouter(tags=["comments"])
 
 
 def _visible_entry_or_404(entry_id: int, db: Session, user: User | None) -> JournalEntry:
     """Comment visibility is exactly entry visibility - the same public /
-    own-private / co-authored-private rule GET /api/entries uses (see
-    entries.py's _can_view), not a separate concept. Reusing that helper
-    directly (rather than re-deriving the same three conditions here) means
-    the two can never quietly drift apart."""
-    entry = db.get(JournalEntry, entry_id)
-    if entry is None or not _can_view(entry, user):
-        raise HTTPException(status_code=404, detail="Entry not found")
-    return entry
+    own-private / co-authored-private rule GET /api/entries uses, not a
+    separate concept. Delegates straight to entries.py's own
+    _visible_or_404/_can_view (the same helpers list_entries and
+    get_entry use) instead of re-deriving the same check here, so there is
+    exactly one visibility implementation, not two that could drift."""
+    return _visible_or_404(db.get(JournalEntry, entry_id), user)
 
 
 def _visible_comment_or_404(comment_id: int, db: Session, user: User | None) -> Comment:
