@@ -3,20 +3,21 @@ import { fetchTags } from '../api'
 import { useAuth } from '../auth/AuthContext'
 
 interface Props {
+  workspaceId: number
   selected: string[]
   onChange: (tags: string[]) => void
 }
 
-export default function TagInput({ selected, onChange }: Props) {
+export default function TagInput({ workspaceId, selected, onChange }: Props) {
   const { token } = useAuth()
   const [query, setQuery] = useState('')
   const [knownTags, setKnownTags] = useState<string[]>([])
 
   useEffect(() => {
-    fetchTags(token)
+    fetchTags(workspaceId, token)
       .then(setKnownTags)
       .catch(() => setKnownTags([]))
-  }, [token])
+  }, [workspaceId, token])
 
   function addTag(raw: string) {
     const name = raw.trim().toLowerCase()

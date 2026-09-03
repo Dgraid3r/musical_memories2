@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import type { Comment as CommentType } from '../types'
 
 interface Props {
+  workspaceId: number
   entryId: number
   entryOwnerId: number
 }
@@ -30,7 +31,7 @@ function countComments(comments: CommentType[]): number {
   return comments.reduce((sum, c) => sum + 1 + countComments(c.replies), 0)
 }
 
-export default function CommentThread({ entryId, entryOwnerId }: Props) {
+export default function CommentThread({ workspaceId, entryId, entryOwnerId }: Props) {
   const { user, token } = useAuth()
   const [expanded, setExpanded] = useState(false)
   const [comments, setComments] = useState<CommentType[]>([])
@@ -42,26 +43,26 @@ export default function CommentThread({ entryId, entryOwnerId }: Props) {
   useEffect(() => {
     // Loaded once, up front (not gated behind "expanded"), purely so the
     // toggle button can show a comment count without requiring a click.
-    fetchComments(entryId, token)
+    fetchComments(workspaceId, entryId, token)
       .then((c) => setTotalCount(countComments(c)))
       .catch(() => setTotalCount(null))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entryId])
+  }, [workspaceId, entryId])
 
   useEffect(() => {
     if (!expanded) return
     setLoading(true)
-    fetchComments(entryId, token)
+    fetchComments(workspaceId, entryId, token)
       .then(setComments)
       .finally(() => setLoading(false))
-  }, [expanded, entryId, token])
+  }, [expanded, workspaceId, entryId, token])
 
   async function handlePostTopLevel(e: React.FormEvent) {
     e.preventDefault()
     if (!token || !newBody.trim()) return
     setPosting(true)
     try {
-      const comment = await createComment(entryId, { body: newBody.trim() }, token)
+      const comment = await createComment(workspaceId, entryId, { body: newBody.trim() }, token)
       setComments((prev) => [...prev, comment])
       setTotalCount((prev) => (prev ?? 0) + 1)
       setNewBody('')
@@ -105,6 +106,7 @@ export default function CommentThread({ entryId, entryOwnerId }: Props) {
                 <CommentItem
                   key={comment.id}
                   comment={comment}
+                  workspaceId={workspaceId}
                   entryOwnerId={entryOwnerId}
                   onReplyPosted={handleReplyPosted}
                   onUpdated={handleUpdated}
@@ -135,13 +137,14 @@ export default function CommentThread({ entryId, entryOwnerId }: Props) {
 
 interface ItemProps {
   comment: CommentType
+  workspaceId: number
   entryOwnerId: number
   onReplyPosted: (parentId: number, reply: CommentType) => void
   onUpdated: (updated: CommentType) => void
   onDeleted: (commentId: number) => void
 }
 
-function CommentItem({ comment, entryOwnerId, onReplyPosted, onUpdated, onDeleted }: ItemProps) {
+function CommentItem({ comment, workspaceId, entryOwnerId, onReplyPosted, onUpdated, onDeleted }: ItemProps) {
   const { user, token } = useAuth()
   const [replying, setReplying] = useState(false)
   const [replyBody, setReplyBody] = useState('')
@@ -165,6 +168,7 @@ function CommentItem({ comment, entryOwnerId, onReplyPosted, onUpdated, onDelete
     setPosting(true)
     try {
       const reply = await createComment(
+        workspaceId,
         comment.entry_id,
         { body: replyBody.trim(), parent_comment_id: comment.id },
         token,
@@ -264,6 +268,7 @@ function CommentItem({ comment, entryOwnerId, onReplyPosted, onUpdated, onDelete
             <CommentItem
               key={reply.id}
               comment={reply}
+              workspaceId={workspaceId}
               entryOwnerId={entryOwnerId}
               onReplyPosted={onReplyPosted}
               onUpdated={onUpdated}

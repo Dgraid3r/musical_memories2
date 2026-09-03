@@ -7,12 +7,13 @@ import PlaylistSearch from './PlaylistSearch'
 import TagInput from './TagInput'
 
 interface Props {
+  workspaceId: number
   onCreated: (entry: JournalEntry) => void
 }
 
 const today = () => new Date().toISOString().slice(0, 10)
 
-export default function NewEntryForm({ onCreated }: Props) {
+export default function NewEntryForm({ workspaceId, onCreated }: Props) {
   const { token } = useAuth()
   const [startDate, setStartDate] = useState(today())
   const [spansMultipleDays, setSpansMultipleDays] = useState(false)
@@ -42,6 +43,7 @@ export default function NewEntryForm({ onCreated }: Props) {
     setError(null)
     try {
       const entry = await createEntry(
+        workspaceId,
         { startDate, endDate: effectiveEndDate, text, playlist, images, isPublic, coauthorUsernames, tags },
         token,
       )
@@ -108,9 +110,9 @@ export default function NewEntryForm({ onCreated }: Props) {
 
       <PlaylistSearch selected={playlist} onSelect={setPlaylist} />
 
-      <CoAuthorPicker selected={coauthorUsernames} onChange={setCoauthorUsernames} />
+      <CoAuthorPicker workspaceId={workspaceId} selected={coauthorUsernames} onChange={setCoauthorUsernames} />
 
-      <TagInput selected={tags} onChange={setTags} />
+      <TagInput workspaceId={workspaceId} selected={tags} onChange={setTags} />
 
       <label htmlFor="entry-images">Photos</label>
       <input
