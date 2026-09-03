@@ -60,17 +60,30 @@ export interface Comment {
   replies: Comment[]
 }
 
+export type WorkspaceVisibility = 'public' | 'private'
+export type WorkspaceRole = 'owner' | 'member' | 'subscriber'
+
 export interface Workspace {
   id: number
   name: string
+  visibility: WorkspaceVisibility
   created_at: string
   created_by: number
-  // The caller's own role in this workspace: "owner" or "member".
-  role: string
+  // The caller's own role in this workspace.
+  role: WorkspaceRole
 }
 
 export interface WorkspaceMember {
   user_id: number
   username: string
-  role: string
+  role: WorkspaceRole
+}
+
+// A public workspace as returned by the discovery endpoint - deliberately
+// just enough to identify/browse to it, never entry content and never a
+// caller-specific role (browsing needs no auth at all).
+export interface PublicWorkspace {
+  id: number
+  name: string
+  created_at: string
 }

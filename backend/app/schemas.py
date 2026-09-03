@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -142,12 +143,30 @@ class WorkspaceCreate(BaseModel):
 class WorkspaceOut(BaseModel):
     id: int
     name: str
+    visibility: Literal["public", "private"]
     created_at: datetime
     created_by: int
     # The caller's own role in this workspace - not a Workspace column, so
     # this model is always constructed explicitly rather than via
     # from_attributes off the ORM object alone.
     role: str
+
+
+class PublicWorkspaceOut(BaseModel):
+    """Just enough to identify/browse to a public workspace from the
+    discovery endpoint - never entry content, and never anything about a
+    caller's own role (the discovery endpoint needs no auth at all, so
+    there may not even be a caller)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    created_at: datetime
+
+
+class WorkspaceVisibilityUpdate(BaseModel):
+    visibility: Literal["public", "private"]
 
 
 class WorkspaceMemberAdd(BaseModel):
@@ -158,3 +177,8 @@ class WorkspaceMemberOut(BaseModel):
     user_id: int
     username: str
     role: str
+
+
+class WorkspaceMemberRoleUpdate(BaseModel):
+    # Deliberately excludes "owner" - there's no ownership-transfer flow.
+    role: Literal["member", "subscriber"]

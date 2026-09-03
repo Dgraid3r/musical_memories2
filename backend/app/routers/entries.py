@@ -7,11 +7,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user
+from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
 from ..models import EntryImage, JournalEntry, Tag, User, WorkspaceMembership
 from ..schemas import JournalEntryOut, JournalEntryUpdate
-from .workspaces import require_workspace_member
+from .workspaces import WRITE_ROLES, require_workspace_read_access, require_workspace_write_access
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +21,12 @@ UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 
 
-def _is_owner(entry: JournalEntry, user: User) -> bool:
-    return entry.user_id == user.id
+def _is_owner(entry: JournalEntry, user: User | None) -> bool:
+    return user is not None and entry.user_id == user.id
 
 
-def _is_coauthor(entry: JournalEntry, user: User) -> bool:
-    return any(u.id == user.id for u in entry.coauthors)
+def _is_coauthor(entry: JournalEntry, user: User | None) -> bool:
+    return user is not None and any(u.id == user.id for u in entry.coauthors)
 
 
 def _is_workspace_member(workspace_id: int, user: User, db: Session) -> bool:
@@ -41,13 +41,26 @@ def _is_workspace_member(workspace_id: int, user: User, db: Session) -> bool:
     )
 
 
-def _can_view(entry: JournalEntry, user: User, db: Session) -> bool:
-    # Workspace membership is checked here (not just assumed from an
-    # upstream route gate) so this helper is correct on its own wherever
-    # it's called from - including comments.py's /api/comments/{id} routes,
-    # which have no workspace_id in their URL at all and rely entirely on
-    # the comment's own entry to know which workspace applies.
-    if not _is_workspace_member(entry.workspace_id, user, db):
+def _can_view(entry: JournalEntry, user: User | None, db: Session) -> bool:
+    # Self-sufficient regardless of upstream gating - re-derives workspace
+    # access itself rather than assuming a route already checked it, so
+    # this is correct wherever it's called from, including comments.py's
+    # /api/comments/{id} routes, which have no workspace_id in their URL at
+    # all and rely entirely on the comment's own entry to know which
+    # workspace applies.
+    if entry.workspace.visibility == "public":
+        # A public workspace's *public* entries are readable by anyone,
+        # anonymous included. A *private* entry inside a public workspace
+        # is still never broadened by the workspace's own publicity - it
+        # stays owner/co-author only, exactly as it would in a private
+        # workspace.
+        if entry.is_public:
+            return True
+        return _is_owner(entry, user) or _is_coauthor(entry, user)
+
+    # Private workspace: the caller must be authenticated and hold ANY
+    # role (owner/member/subscriber) there.
+    if user is None or not _is_workspace_member(entry.workspace_id, user, db):
         return False
     return entry.is_public or _is_owner(entry, user) or _is_coauthor(entry, user)
 
@@ -56,10 +69,11 @@ def _can_edit_content(entry: JournalEntry, user: User) -> bool:
     return _is_owner(entry, user) or _is_coauthor(entry, user)
 
 
-def _visible_or_404(entry: JournalEntry | None, user: User, db: Session) -> JournalEntry:
+def _visible_or_404(entry: JournalEntry | None, user: User | None, db: Session) -> JournalEntry:
     # A private entry you can't see reads identically to a missing one, so
     # existence of other people's private entries (or of an entry in a
-    # workspace you're not in) is never disclosed.
+    # workspace you're not in) is never disclosed - including to a fully
+    # anonymous caller.
     if entry is None or not _can_view(entry, user, db):
         raise HTTPException(status_code=404, detail="Entry not found")
     return entry
@@ -77,22 +91,28 @@ def _get_entry_in_workspace_or_404(entry_id: int, workspace_id: int, db: Session
     return entry
 
 
-def _apply_visibility(stmt: Select, current_user: User, workspace_id: int) -> Select:
-    """Entries in this workspace that are public (visible to every member of
-    the workspace, not the whole app), plus the caller's own private ones,
-    plus private ones the caller is a co-author on. Shared by every endpoint
-    that lists or searches entries so the visibility rule is defined in
-    exactly one place. Every caller of this has already passed
-    require_workspace_member, so no anonymous/non-member branch is needed
-    here - reaching this function at all means the caller belongs to
-    workspace_id."""
+def _apply_visibility(stmt: Select, current_user: User | None, workspace_id: int) -> Select:
+    """Entries in this workspace that are public, plus the caller's own
+    private ones, plus private ones the caller is a co-author on. Shared by
+    every endpoint that lists or searches entries so the visibility rule is
+    defined in exactly one place.
+
+    Every caller of this has already passed require_workspace_read_access,
+    so reaching this function at all means the caller can read *something*
+    in workspace_id - either because it's public, or because they hold a
+    role there. The only thing left to decide per-row is whether a specific
+    private entry belongs to *this* caller: an anonymous caller (only
+    possible when the workspace is public) sees just the public entries;
+    an authenticated caller also sees their own private ones."""
+    stmt = stmt.where(JournalEntry.workspace_id == workspace_id)
+    if current_user is None:
+        return stmt.where(JournalEntry.is_public.is_(True))
     return stmt.where(
-        JournalEntry.workspace_id == workspace_id,
         or_(
             JournalEntry.is_public.is_(True),
             JournalEntry.user_id == current_user.id,
             JournalEntry.coauthors.any(User.id == current_user.id),
-        ),
+        )
     )
 
 
@@ -109,19 +129,23 @@ def _resolve_coauthors(usernames: list[str], db: Session, exclude_user_id: int, 
     candidates = [u for u in users if u.id != exclude_user_id]
 
     if candidates:
-        member_ids = set(
+        # Co-authors get full content-edit rights, the same as a workspace
+        # member - a subscriber (read-only) is never a valid co-author
+        # candidate, same as a non-member isn't.
+        writer_ids = set(
             db.scalars(
                 select(WorkspaceMembership.user_id).where(
                     WorkspaceMembership.workspace_id == workspace_id,
                     WorkspaceMembership.user_id.in_([u.id for u in candidates]),
+                    WorkspaceMembership.role.in_(WRITE_ROLES),
                 )
             ).all()
         )
-        non_members = sorted(u.username for u in candidates if u.id not in member_ids)
-        if non_members:
+        non_writers = sorted(u.username for u in candidates if u.id not in writer_ids)
+        if non_writers:
             raise HTTPException(
                 status_code=422,
-                detail=f"Not a member of this workspace: {', '.join(non_members)}",
+                detail=f"Not a member of this workspace: {', '.join(non_writers)}",
             )
 
     return candidates
@@ -166,14 +190,15 @@ def list_entries(
     q: str | None = Query(None, min_length=1, description="Full-text search across entry text and tags"),
     tag: str | None = Query(None, description="Filter to entries carrying this exact tag name"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_optional),
 ):
-    """Entries in this workspace that are public (workspace-wide, not
-    app-wide) plus the caller's own private ones and any private entries the
-    caller is a co-author on. Optionally narrowed by a full-text search (`q`,
-    matched against entry text and tag names via Postgres tsvector) and/or
-    an exact tag filter (`tag`)."""
-    require_workspace_member(workspace_id, db, current_user)
+    """Entries in this workspace that are public, plus (if logged in) the
+    caller's own private ones and any private entries the caller is a
+    co-author on. A public workspace is readable with no auth token at all;
+    a private one requires holding any role there. Optionally narrowed by a
+    full-text search (`q`, matched against entry text and tag names via
+    Postgres tsvector) and/or an exact tag filter (`tag`)."""
+    require_workspace_read_access(workspace_id, db, current_user)
 
     stmt = _apply_visibility(select(JournalEntry), current_user, workspace_id)
 
@@ -194,13 +219,13 @@ def list_entries(
 def list_tags(
     workspace_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_optional),
 ):
     """All tag names in use in this workspace, across entries visible to the
     caller - the same visibility rule as listing entries, so a tag used only
     on someone else's private entry doesn't leak here. Used to power tag
     autocomplete."""
-    require_workspace_member(workspace_id, db, current_user)
+    require_workspace_read_access(workspace_id, db, current_user)
 
     # Tag isn't a JournalEntry, so the visibility helper's JournalEntry.*
     # filters need an explicit join from Tag back to journal_entries.
@@ -214,9 +239,9 @@ def get_entry(
     workspace_id: int,
     entry_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_optional),
 ):
-    require_workspace_member(workspace_id, db, current_user)
+    require_workspace_read_access(workspace_id, db, current_user)
     entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     return _visible_or_404(entry, current_user, db)
 
@@ -238,7 +263,7 @@ def create_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_workspace_member(workspace_id, db, current_user)
+    require_workspace_write_access(workspace_id, db, current_user)
 
     end_date = end_date or start_date
     if end_date < start_date:
@@ -277,7 +302,7 @@ def add_images(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_workspace_member(workspace_id, db, current_user)
+    require_workspace_write_access(workspace_id, db, current_user)
     entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     if not _can_edit_content(entry, current_user):
         raise HTTPException(status_code=403, detail="You do not have permission to edit this entry")
@@ -297,7 +322,7 @@ def update_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_workspace_member(workspace_id, db, current_user)
+    require_workspace_write_access(workspace_id, db, current_user)
     entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     if not _can_edit_content(entry, current_user):
         raise HTTPException(status_code=403, detail="You do not have permission to edit this entry")
@@ -334,7 +359,7 @@ def delete_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    require_workspace_member(workspace_id, db, current_user)
+    require_workspace_write_access(workspace_id, db, current_user)
     entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     if not _is_owner(entry, current_user):
         raise HTTPException(status_code=403, detail="Only the primary author can delete this entry")
