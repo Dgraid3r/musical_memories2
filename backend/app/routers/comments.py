@@ -1,45 +1,57 @@
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user, get_current_user_optional
+from ..auth import get_current_user
 from ..database import get_db
-from ..models import Comment, JournalEntry, User
+from ..models import Comment, User
 from ..schemas import CommentCreate, CommentOut, CommentUpdate
-from .entries import _can_view, _is_owner, _visible_or_404
+from .entries import _can_view, _get_entry_in_workspace_or_404, _is_owner, _visible_or_404
+from .workspaces import require_workspace_member
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["comments"])
 
 
-def _visible_entry_or_404(entry_id: int, db: Session, user: User | None) -> JournalEntry:
+def _visible_entry_or_404(entry_id: int, workspace_id: int, db: Session, user: User):
     """Comment visibility is exactly entry visibility - the same public /
-    own-private / co-authored-private rule GET /api/entries uses, not a
-    separate concept. Delegates straight to entries.py's own
-    _visible_or_404/_can_view (the same helpers list_entries and
-    get_entry use) instead of re-deriving the same check here, so there is
-    exactly one visibility implementation, not two that could drift."""
-    return _visible_or_404(db.get(JournalEntry, entry_id), user)
+    own-private / co-authored-private rule (now also workspace-scoped) that
+    GET /api/workspaces/{workspace_id}/entries uses, not a separate concept.
+    Delegates straight to entries.py's own scope-then-visibility helpers
+    (the same ones list_entries and get_entry use) instead of re-deriving
+    the same checks here, so there is exactly one visibility implementation,
+    not two that could drift."""
+    entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
+    return _visible_or_404(entry, user, db)
 
 
-def _visible_comment_or_404(comment_id: int, db: Session, user: User | None) -> Comment:
+def _visible_comment_or_404(comment_id: int, db: Session, user: User) -> Comment:
+    """No workspace_id in this URL (see /api/comments/{comment_id} below) -
+    _can_view derives the right workspace entirely from the comment's own
+    entry, so this is correct regardless of which workspace the comment
+    actually belongs to."""
     comment = db.get(Comment, comment_id)
-    if comment is None or not _can_view(comment.entry, user):
+    if comment is None or not _can_view(comment.entry, user, db):
         raise HTTPException(status_code=404, detail="Comment not found")
     return comment
 
 
-@router.get("/api/entries/{entry_id}/comments", response_model=list[CommentOut])
+@router.get("/api/workspaces/{workspace_id}/entries/{entry_id}/comments", response_model=list[CommentOut])
 def list_comments(
+    workspace_id: int,
     entry_id: int,
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
     """The full thread for an entry, as a nested tree: top-level comments in
     chronological order, each carrying its replies (also chronological,
     arbitrarily deep) inline."""
-    entry = _visible_entry_or_404(entry_id, db, current_user)
+    require_workspace_member(workspace_id, db, current_user)
+    entry = _visible_entry_or_404(entry_id, workspace_id, db, current_user)
     stmt = (
         select(Comment)
         .where(Comment.entry_id == entry.id, Comment.parent_comment_id.is_(None))
@@ -48,8 +60,9 @@ def list_comments(
     return db.scalars(stmt).unique().all()
 
 
-@router.post("/api/entries/{entry_id}/comments", response_model=CommentOut, status_code=201)
+@router.post("/api/workspaces/{workspace_id}/entries/{entry_id}/comments", response_model=CommentOut, status_code=201)
 def create_comment(
+    workspace_id: int,
     entry_id: int,
     payload: CommentCreate,
     db: Session = Depends(get_db),
@@ -57,7 +70,8 @@ def create_comment(
 ):
     """Anyone who can view the entry can comment on it - same rule as
     viewing its comments (see _visible_entry_or_404)."""
-    entry = _visible_entry_or_404(entry_id, db, current_user)
+    require_workspace_member(workspace_id, db, current_user)
+    entry = _visible_entry_or_404(entry_id, workspace_id, db, current_user)
 
     parent_id = None
     if payload.parent_comment_id is not None:

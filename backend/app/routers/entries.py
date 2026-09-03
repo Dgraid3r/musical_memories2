@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import date
 from pathlib import Path
@@ -6,58 +7,96 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user, get_current_user_optional
+from ..auth import get_current_user
 from ..database import get_db
-from ..models import EntryImage, JournalEntry, Tag, User
+from ..models import EntryImage, JournalEntry, Tag, User, WorkspaceMembership
 from ..schemas import JournalEntryOut, JournalEntryUpdate
+from .workspaces import require_workspace_member
 
-router = APIRouter(prefix="/api/entries", tags=["entries"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/workspaces/{workspace_id}/entries", tags=["entries"])
 
 UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 
 
-def _is_owner(entry: JournalEntry, user: User | None) -> bool:
-    return user is not None and entry.user_id == user.id
+def _is_owner(entry: JournalEntry, user: User) -> bool:
+    return entry.user_id == user.id
 
 
-def _is_coauthor(entry: JournalEntry, user: User | None) -> bool:
-    return user is not None and any(u.id == user.id for u in entry.coauthors)
+def _is_coauthor(entry: JournalEntry, user: User) -> bool:
+    return any(u.id == user.id for u in entry.coauthors)
 
 
-def _can_view(entry: JournalEntry, user: User | None) -> bool:
+def _is_workspace_member(workspace_id: int, user: User, db: Session) -> bool:
+    return (
+        db.scalar(
+            select(WorkspaceMembership.id).where(
+                WorkspaceMembership.workspace_id == workspace_id,
+                WorkspaceMembership.user_id == user.id,
+            )
+        )
+        is not None
+    )
+
+
+def _can_view(entry: JournalEntry, user: User, db: Session) -> bool:
+    # Workspace membership is checked here (not just assumed from an
+    # upstream route gate) so this helper is correct on its own wherever
+    # it's called from - including comments.py's /api/comments/{id} routes,
+    # which have no workspace_id in their URL at all and rely entirely on
+    # the comment's own entry to know which workspace applies.
+    if not _is_workspace_member(entry.workspace_id, user, db):
+        return False
     return entry.is_public or _is_owner(entry, user) or _is_coauthor(entry, user)
 
 
-def _can_edit_content(entry: JournalEntry, user: User | None) -> bool:
+def _can_edit_content(entry: JournalEntry, user: User) -> bool:
     return _is_owner(entry, user) or _is_coauthor(entry, user)
 
 
-def _visible_or_404(entry: JournalEntry | None, user: User | None) -> JournalEntry:
+def _visible_or_404(entry: JournalEntry | None, user: User, db: Session) -> JournalEntry:
     # A private entry you can't see reads identically to a missing one, so
-    # existence of other people's private entries is never disclosed.
-    if entry is None or not _can_view(entry, user):
+    # existence of other people's private entries (or of an entry in a
+    # workspace you're not in) is never disclosed.
+    if entry is None or not _can_view(entry, user, db):
         raise HTTPException(status_code=404, detail="Entry not found")
     return entry
 
 
-def _apply_visibility(stmt: Select, current_user: User | None) -> Select:
-    """Public entries from everyone, plus the caller's own private ones and
-    any private entries the caller is a co-author on. Shared by every
-    endpoint that lists or searches entries so the visibility rule is
-    defined in exactly one place."""
-    if current_user is None:
-        return stmt.where(JournalEntry.is_public.is_(True))
+def _get_entry_in_workspace_or_404(entry_id: int, workspace_id: int, db: Session) -> JournalEntry:
+    """Existence-and-scope check: does this entry exist, and does it belong
+    to the workspace named in the URL? Deliberately separate from
+    _visible_or_404 (view permission) - callers that need edit/delete
+    permission use this first, then apply their own 403 check, matching the
+    existing "404 for missing, 403 for forbidden" split."""
+    entry = db.get(JournalEntry, entry_id)
+    if entry is None or entry.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return entry
+
+
+def _apply_visibility(stmt: Select, current_user: User, workspace_id: int) -> Select:
+    """Entries in this workspace that are public (visible to every member of
+    the workspace, not the whole app), plus the caller's own private ones,
+    plus private ones the caller is a co-author on. Shared by every endpoint
+    that lists or searches entries so the visibility rule is defined in
+    exactly one place. Every caller of this has already passed
+    require_workspace_member, so no anonymous/non-member branch is needed
+    here - reaching this function at all means the caller belongs to
+    workspace_id."""
     return stmt.where(
+        JournalEntry.workspace_id == workspace_id,
         or_(
             JournalEntry.is_public.is_(True),
             JournalEntry.user_id == current_user.id,
             JournalEntry.coauthors.any(User.id == current_user.id),
-        )
+        ),
     )
 
 
-def _resolve_coauthors(usernames: list[str], db: Session, exclude_user_id: int) -> list[User]:
+def _resolve_coauthors(usernames: list[str], db: Session, exclude_user_id: int, workspace_id: int) -> list[User]:
     unique_usernames = {u.strip() for u in usernames if u.strip()}
     if not unique_usernames:
         return []
@@ -67,20 +106,41 @@ def _resolve_coauthors(usernames: list[str], db: Session, exclude_user_id: int) 
         raise HTTPException(status_code=422, detail=f"Unknown username(s): {', '.join(sorted(missing))}")
     # Silently drop the primary author if they listed themselves - they're
     # already the owner, not a co-author.
-    return [u for u in users if u.id != exclude_user_id]
+    candidates = [u for u in users if u.id != exclude_user_id]
+
+    if candidates:
+        member_ids = set(
+            db.scalars(
+                select(WorkspaceMembership.user_id).where(
+                    WorkspaceMembership.workspace_id == workspace_id,
+                    WorkspaceMembership.user_id.in_([u.id for u in candidates]),
+                )
+            ).all()
+        )
+        non_members = sorted(u.username for u in candidates if u.id not in member_ids)
+        if non_members:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Not a member of this workspace: {', '.join(non_members)}",
+            )
+
+    return candidates
 
 
-def _resolve_tags(names: list[str], db: Session) -> list[Tag]:
+def _resolve_tags(names: list[str], db: Session, workspace_id: int) -> list[Tag]:
     """Unlike co-authors, tags are get-or-create: any free-text tag name is
-    valid, and typing one for the first time defines it. Names are
-    normalized (trimmed, lowercased) so casing/whitespace variants collapse
-    onto the same tag."""
+    valid, and typing one for the first time defines it - scoped to this
+    workspace, so two different workspaces can each have their own tag with
+    the same name. Names are normalized (trimmed, lowercased) so
+    casing/whitespace variants collapse onto the same tag."""
     normalized = {n.strip().lower() for n in names if n.strip()}
     if not normalized:
         return []
-    existing = db.scalars(select(Tag).where(Tag.name.in_(normalized))).all()
+    existing = db.scalars(
+        select(Tag).where(Tag.workspace_id == workspace_id, Tag.name.in_(normalized))
+    ).all()
     existing_names = {t.name for t in existing}
-    new_tags = [Tag(name=name) for name in normalized if name not in existing_names]
+    new_tags = [Tag(name=name, workspace_id=workspace_id) for name in normalized if name not in existing_names]
     for tag in new_tags:
         db.add(tag)
     if new_tags:
@@ -102,16 +162,20 @@ def _save_images(images: list[UploadFile], entry_id: int, db: Session) -> None:
 
 @router.get("", response_model=list[JournalEntryOut])
 def list_entries(
+    workspace_id: int,
     q: str | None = Query(None, min_length=1, description="Full-text search across entry text and tags"),
     tag: str | None = Query(None, description="Filter to entries carrying this exact tag name"),
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
-    """Public entries from everyone, plus the caller's own private ones and
-    any private entries the caller is a co-author on. Optionally narrowed by
-    a full-text search (`q`, matched against entry text and tag names via
-    Postgres tsvector) and/or an exact tag filter (`tag`)."""
-    stmt = _apply_visibility(select(JournalEntry), current_user)
+    """Entries in this workspace that are public (workspace-wide, not
+    app-wide) plus the caller's own private ones and any private entries the
+    caller is a co-author on. Optionally narrowed by a full-text search (`q`,
+    matched against entry text and tag names via Postgres tsvector) and/or
+    an exact tag filter (`tag`)."""
+    require_workspace_member(workspace_id, db, current_user)
+
+    stmt = _apply_visibility(select(JournalEntry), current_user, workspace_id)
 
     if tag is not None:
         stmt = stmt.where(JournalEntry.tags.any(Tag.name == tag.strip().lower()))
@@ -128,31 +192,38 @@ def list_entries(
 
 @router.get("/tags", response_model=list[str])
 def list_tags(
+    workspace_id: int,
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
-    """All tag names in use across entries visible to the caller - the same
-    visibility rule as listing entries, so a tag used only on someone else's
-    private entry doesn't leak here. Used to power tag autocomplete."""
+    """All tag names in use in this workspace, across entries visible to the
+    caller - the same visibility rule as listing entries, so a tag used only
+    on someone else's private entry doesn't leak here. Used to power tag
+    autocomplete."""
+    require_workspace_member(workspace_id, db, current_user)
+
     # Tag isn't a JournalEntry, so the visibility helper's JournalEntry.*
     # filters need an explicit join from Tag back to journal_entries.
-    stmt = select(Tag.name).join(Tag.entries)
-    stmt = _apply_visibility(stmt, current_user).distinct().order_by(Tag.name)
+    stmt = select(Tag.name).where(Tag.workspace_id == workspace_id).join(Tag.entries)
+    stmt = _apply_visibility(stmt, current_user, workspace_id).distinct().order_by(Tag.name)
     return db.scalars(stmt).all()
 
 
 @router.get("/{entry_id}", response_model=JournalEntryOut)
 def get_entry(
+    workspace_id: int,
     entry_id: int,
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    current_user: User = Depends(get_current_user),
 ):
-    entry = db.get(JournalEntry, entry_id)
-    return _visible_or_404(entry, current_user)
+    require_workspace_member(workspace_id, db, current_user)
+    entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
+    return _visible_or_404(entry, current_user, db)
 
 
 @router.post("", response_model=JournalEntryOut, status_code=201)
 def create_entry(
+    workspace_id: int,
     start_date: date = Form(...),
     end_date: date | None = Form(None),
     text: str | None = Form(None),
@@ -167,11 +238,14 @@ def create_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    require_workspace_member(workspace_id, db, current_user)
+
     end_date = end_date or start_date
     if end_date < start_date:
         raise HTTPException(status_code=422, detail="end_date cannot be before start_date")
 
     entry = JournalEntry(
+        workspace_id=workspace_id,
         user_id=current_user.id,
         start_date=start_date,
         end_date=end_date,
@@ -181,8 +255,8 @@ def create_entry(
         playlist_url=playlist_url,
         playlist_image_url=playlist_image_url,
         is_public=is_public,
-        coauthors=_resolve_coauthors(coauthor_usernames, db, exclude_user_id=current_user.id),
-        tags=_resolve_tags(tags, db),
+        coauthors=_resolve_coauthors(coauthor_usernames, db, exclude_user_id=current_user.id, workspace_id=workspace_id),
+        tags=_resolve_tags(tags, db, workspace_id),
     )
     db.add(entry)
     db.flush()
@@ -191,19 +265,20 @@ def create_entry(
 
     db.commit()
     db.refresh(entry)
+    logger.info("entry.created workspace_id=%s entry_id=%s user_id=%s", workspace_id, entry.id, current_user.id)
     return entry
 
 
 @router.post("/{entry_id}/images", response_model=JournalEntryOut, status_code=201)
 def add_images(
+    workspace_id: int,
     entry_id: int,
     images: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    entry = db.get(JournalEntry, entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Entry not found")
+    require_workspace_member(workspace_id, db, current_user)
+    entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     if not _can_edit_content(entry, current_user):
         raise HTTPException(status_code=403, detail="You do not have permission to edit this entry")
 
@@ -216,14 +291,14 @@ def add_images(
 
 @router.patch("/{entry_id}", response_model=JournalEntryOut)
 def update_entry(
+    workspace_id: int,
     entry_id: int,
     payload: JournalEntryUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    entry = db.get(JournalEntry, entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Entry not found")
+    require_workspace_member(workspace_id, db, current_user)
+    entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     if not _can_edit_content(entry, current_user):
         raise HTTPException(status_code=403, detail="You do not have permission to edit this entry")
 
@@ -231,7 +306,7 @@ def update_entry(
         entry.text = payload.text
 
     if payload.tags is not None:
-        entry.tags = _resolve_tags(payload.tags, db)
+        entry.tags = _resolve_tags(payload.tags, db, workspace_id)
 
     # Visibility and co-author management stay primary-author-only, even for
     # a co-author who otherwise has content-edit rights on this entry.
@@ -243,7 +318,9 @@ def update_entry(
     if payload.coauthor_usernames is not None:
         if not _is_owner(entry, current_user):
             raise HTTPException(status_code=403, detail="Only the primary author can manage co-authors")
-        entry.coauthors = _resolve_coauthors(payload.coauthor_usernames, db, exclude_user_id=entry.user_id)
+        entry.coauthors = _resolve_coauthors(
+            payload.coauthor_usernames, db, exclude_user_id=entry.user_id, workspace_id=workspace_id
+        )
 
     db.commit()
     db.refresh(entry)
@@ -252,13 +329,13 @@ def update_entry(
 
 @router.delete("/{entry_id}", status_code=204)
 def delete_entry(
+    workspace_id: int,
     entry_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    entry = db.get(JournalEntry, entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Entry not found")
+    require_workspace_member(workspace_id, db, current_user)
+    entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     if not _is_owner(entry, current_user):
         raise HTTPException(status_code=403, detail="Only the primary author can delete this entry")
     for image in entry.images:
@@ -266,3 +343,4 @@ def delete_entry(
         image_path.unlink(missing_ok=True)
     db.delete(entry)
     db.commit()
+    logger.info("entry.deleted workspace_id=%s entry_id=%s user_id=%s", workspace_id, entry_id, current_user.id)
