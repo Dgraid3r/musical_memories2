@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -62,12 +63,20 @@ class User(Base):
 class Workspace(Base):
     """An isolated group - e.g. one family's journal vs. a friend group's.
     Entries and tags belong to exactly one workspace; a user can belong to
-    several workspaces via WorkspaceMembership."""
+    several workspaces via WorkspaceMembership.
+
+    `visibility` is owner-controlled and defaults to "private": a "public"
+    workspace is discoverable via the public browse endpoint and its
+    entries are readable by anyone, including fully anonymous requests,
+    with no membership at all. A "private" workspace is invisible to that
+    search and unreadable by anyone who isn't a member (any role)."""
 
     __tablename__ = "workspaces"
+    __table_args__ = (CheckConstraint("visibility IN ('public', 'private')", name="ck_workspaces_visibility"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
+    visibility: Mapped[str] = mapped_column(String, nullable=False, default="private", server_default="private")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
 
@@ -80,14 +89,26 @@ class Workspace(Base):
 
 
 class WorkspaceMembership(Base):
-    """One user's membership in one workspace, with a role - the same
-    owner/member asymmetry already used for an entry's primary author vs.
-    co-authors: "owner" created the workspace and can invite/remove members
-    and delete the workspace; "member" can do everything else (create
-    entries, comment, etc.)."""
+    """One user's membership in one workspace, with a role:
+    - "owner" created the workspace and can invite/remove members, change
+      a member's role, toggle public/private, and delete the workspace.
+    - "member" can do everything else (create entries, comment, add
+      co-authors, etc.) - the same power an entry co-author has over
+      content, one level up.
+    - "subscriber" is read-only: can read the workspace's entries and
+      comments (same as a member would) but cannot create or edit
+      anything - no entries, no photos, no comments, no co-authoring. This
+      is how an owner grants view access to a *private* workspace without
+      making someone a full collaborator; public workspaces don't need
+      subscribers for reading (anyone can already read those), but nothing
+      stops an owner from adding one there too, e.g. to track who's
+      "following" it."""
 
     __tablename__ = "workspace_memberships"
-    __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_membership"),)
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "user_id", name="uq_workspace_membership"),
+        CheckConstraint("role IN ('owner', 'member', 'subscriber')", name="ck_workspace_memberships_role"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), nullable=False, index=True)
