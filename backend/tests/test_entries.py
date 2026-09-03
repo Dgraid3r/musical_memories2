@@ -374,16 +374,19 @@ def test_add_images_requires_auth(client, make_user, make_workspace):
 # --- Visibility (ownership, unrelated to co-authors) ---------------------
 
 
-def test_list_entries_requires_auth(client, make_user, make_workspace):
-    """Every workspace-scoped route requires a real logged-in user now -
-    "public" means public *within a workspace you must already belong to*,
-    so there is no more anonymous browsing."""
+def test_list_entries_of_private_workspace_anonymous_returns_404(client, make_user, make_workspace):
+    """Workspaces default to private, and a private workspace is
+    unreadable by anyone who isn't a member - including an anonymous
+    caller with no token at all, who gets 404 (not 401), the same
+    non-disclosure treatment as a private entry: "no such workspace" and
+    "exists but private" must read identically. (A *public* workspace is
+    readable with no token at all - see test_workspaces_visibility.py.)"""
     alice = make_user("alice")
     ws = make_workspace(alice)
     _create_entry(client, ws["id"], alice["headers"], is_public=True, playlist_id="pub")
 
     res = client.get(f"/api/workspaces/{ws['id']}/entries")
-    assert res.status_code == 401
+    assert res.status_code == 404
 
 
 def test_list_entries_owner_sees_own_private_and_public(client, make_user, make_workspace):
@@ -436,13 +439,13 @@ def test_get_private_entry_as_non_owner_returns_404(client, make_user, make_work
     assert res.status_code == 404
 
 
-def test_get_entry_anonymous_returns_401(client, make_user, make_workspace):
+def test_get_entry_in_private_workspace_anonymous_returns_404(client, make_user, make_workspace):
     alice = make_user("alice")
     ws = make_workspace(alice)
     entry_id = _create_entry(client, ws["id"], alice["headers"], is_public=True).json()["id"]
 
     res = client.get(f"/api/workspaces/{ws['id']}/entries/{entry_id}")
-    assert res.status_code == 401
+    assert res.status_code == 404
 
 
 def test_get_own_private_entry_succeeds(client, make_user, make_workspace):

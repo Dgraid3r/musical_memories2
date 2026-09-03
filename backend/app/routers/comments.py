@@ -5,21 +5,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user
+from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
 from ..models import Comment, User
 from ..schemas import CommentCreate, CommentOut, CommentUpdate
 from .entries import _can_view, _get_entry_in_workspace_or_404, _is_owner, _visible_or_404
-from .workspaces import require_workspace_member
+from .workspaces import require_workspace_read_access, require_workspace_write_access
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["comments"])
 
 
-def _visible_entry_or_404(entry_id: int, workspace_id: int, db: Session, user: User):
+def _visible_entry_or_404(entry_id: int, workspace_id: int, db: Session, user: User | None):
     """Comment visibility is exactly entry visibility - the same public /
-    own-private / co-authored-private rule (now also workspace-scoped) that
+    own-private / co-authored-private rule (now also workspace-scoped, and
+    public-workspace-readable-by-anyone) that
     GET /api/workspaces/{workspace_id}/entries uses, not a separate concept.
     Delegates straight to entries.py's own scope-then-visibility helpers
     (the same ones list_entries and get_entry use) instead of re-deriving
@@ -29,7 +30,7 @@ def _visible_entry_or_404(entry_id: int, workspace_id: int, db: Session, user: U
     return _visible_or_404(entry, user, db)
 
 
-def _visible_comment_or_404(comment_id: int, db: Session, user: User) -> Comment:
+def _visible_comment_or_404(comment_id: int, db: Session, user: User | None) -> Comment:
     """No workspace_id in this URL (see /api/comments/{comment_id} below) -
     _can_view derives the right workspace entirely from the comment's own
     entry, so this is correct regardless of which workspace the comment
@@ -45,12 +46,13 @@ def list_comments(
     workspace_id: int,
     entry_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_optional),
 ):
     """The full thread for an entry, as a nested tree: top-level comments in
     chronological order, each carrying its replies (also chronological,
-    arbitrarily deep) inline."""
-    require_workspace_member(workspace_id, db, current_user)
+    arbitrarily deep) inline. Readable with no auth token at all when the
+    workspace is public, same as the entry itself."""
+    require_workspace_read_access(workspace_id, db, current_user)
     entry = _visible_entry_or_404(entry_id, workspace_id, db, current_user)
     stmt = (
         select(Comment)
@@ -68,9 +70,10 @@ def create_comment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Anyone who can view the entry can comment on it - same rule as
-    viewing its comments (see _visible_entry_or_404)."""
-    require_workspace_member(workspace_id, db, current_user)
+    """Commenting is a write action: requires an owner or member role - a
+    subscriber (or an anonymous visitor to a public workspace) can read
+    every comment but never post one."""
+    require_workspace_write_access(workspace_id, db, current_user)
     entry = _visible_entry_or_404(entry_id, workspace_id, db, current_user)
 
     parent_id = None

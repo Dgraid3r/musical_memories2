@@ -170,14 +170,18 @@ def test_list_comments_nests_replies_under_parent_in_order(client, make_user, ma
     assert thread[1]["replies"] == []
 
 
-def test_list_comments_requires_auth(client, make_user, make_workspace):
+def test_list_comments_of_private_workspace_anonymous_returns_404(client, make_user, make_workspace):
+    """Workspaces default to private - an anonymous caller gets 404 (not
+    401), the same non-disclosure treatment used everywhere else. See
+    test_workspaces_visibility.py for the public-workspace case, where
+    this succeeds with no token at all."""
     alice = make_user("alice")
     ws = make_workspace(alice)
     entry_id = _create_entry(client, ws["id"], alice["headers"], is_public=True)
     _comment(client, ws["id"], entry_id, alice["headers"], body="hi")
 
     res = client.get(f"/api/workspaces/{ws['id']}/entries/{entry_id}/comments")
-    assert res.status_code == 401
+    assert res.status_code == 404
 
 
 def test_list_comments_on_private_entry_requires_access(client, make_user, make_workspace):
