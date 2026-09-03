@@ -88,3 +88,37 @@ def make_user(client):
         return {"id": user["id"], "username": username, "headers": {"Authorization": f"Bearer {token}"}}
 
     return _make
+
+
+@pytest.fixture
+def add_workspace_member(client):
+    """Adds `member` (from make_user) to `workspace` (from make_workspace),
+    as its `owner`. Returns the created WorkspaceMemberOut dict."""
+
+    def _add(owner: dict, workspace: dict, member: dict) -> dict:
+        res = client.post(
+            f"/api/workspaces/{workspace['id']}/members",
+            headers=owner["headers"],
+            json={"username": member["username"]},
+        )
+        assert res.status_code == 201, res.text
+        return res.json()
+
+    return _add
+
+
+@pytest.fixture
+def make_workspace(client, add_workspace_member):
+    """Creates a workspace as `owner` (from make_user), who becomes its
+    owner, and adds every user in `members` to it. Returns the created
+    WorkspaceOut dict (id, name, created_at, created_by, role)."""
+
+    def _make(owner: dict, *members: dict, name: str = "Test Workspace") -> dict:
+        res = client.post("/api/workspaces", headers=owner["headers"], json={"name": name})
+        assert res.status_code == 201, res.text
+        workspace = res.json()
+        for member in members:
+            add_workspace_member(owner, workspace, member)
+        return workspace
+
+    return _make
