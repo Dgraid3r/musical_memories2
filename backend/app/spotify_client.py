@@ -1,3 +1,4 @@
+import logging
 import os
 from functools import lru_cache
 
@@ -6,6 +7,8 @@ from cachetools import TTLCache
 from spotipy.oauth2 import SpotifyClientCredentials
 
 from .schemas import PlaylistResult
+
+logger = logging.getLogger(__name__)
 
 # This is a single-process local app, not a distributed service - an
 # in-memory TTL cache is the right tool here, not Redis or any other
@@ -43,10 +46,15 @@ def search_playlists(query: str, limit: int = 10) -> list[PlaylistResult]:
     cache_key = (query, limit)
     cached = _search_cache.get(cache_key)
     if cached is not None:
+        logger.info("spotify.search cache=hit query=%r limit=%d results=%d", query, limit, len(cached))
         return cached
 
-    sp = get_spotify_client()
-    results = sp.search(q=query, type="playlist", limit=limit)
+    try:
+        sp = get_spotify_client()
+        results = sp.search(q=query, type="playlist", limit=limit)
+    except Exception:
+        logger.exception("spotify.search cache=miss query=%r limit=%d failed", query, limit)
+        raise
     items = results.get("playlists", {}).get("items", []) if results else []
 
     playlists: list[PlaylistResult] = []
@@ -65,5 +73,6 @@ def search_playlists(query: str, limit: int = 10) -> list[PlaylistResult]:
             )
         )
 
+    logger.info("spotify.search cache=miss query=%r limit=%d results=%d", query, limit, len(playlists))
     _search_cache[cache_key] = playlists
     return playlists

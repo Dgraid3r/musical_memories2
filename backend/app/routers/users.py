@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -6,13 +8,17 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user, hash_password
 from ..database import get_db
 from ..models import User
+from ..rate_limit import AUTH_RATE_LIMIT, limiter
 from ..schemas import UserCreate, UserOut, UserPublic
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 @router.post("", response_model=UserOut, status_code=201)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit(AUTH_RATE_LIMIT)
+def register(request: Request, payload: UserCreate, db: Session = Depends(get_db)):
     user = User(
         username=payload.username,
         email=payload.email,
@@ -23,8 +29,10 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
         db.commit()
     except IntegrityError:
         db.rollback()
+        logger.warning("auth.register_conflict username=%r", payload.username)
         raise HTTPException(status_code=409, detail="Username or email already registered")
     db.refresh(user)
+    logger.info("auth.register_succeeded user_id=%s", user.id)
     return user
 
 

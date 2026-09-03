@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from .database import get_db
 from .models import User
+
+logger = logging.getLogger(__name__)
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
@@ -59,9 +62,11 @@ def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     if credentials is None:
+        logger.warning("auth.missing_credentials")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     user = _user_from_token(credentials.credentials, db)
     if user is None:
+        logger.warning("auth.invalid_or_expired_token")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
     return user
 

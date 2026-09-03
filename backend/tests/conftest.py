@@ -11,6 +11,9 @@ os.environ["DATABASE_URL"] = os.environ.get(
     "postgresql+psycopg://musical_memories:musical_memories@localhost:5432/musical_memories_test",
 )
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-do-not-use-in-production"
+# A real (if fixed) Fernet key - not a placeholder string, since
+# crypto.EncryptedString actually encrypts/decrypts with it in tests.
+os.environ["TOKEN_ENCRYPTION_KEY"] = "zdoZ_SoNNaBLvqnw_2jnivraHmB-SkxHdJXsLK0LyrU="
 os.environ.setdefault("SPOTIFY_CLIENT_ID", "test-client-id")
 os.environ.setdefault("SPOTIFY_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("SPOTIFY_REDIRECT_URI", "http://localhost:8000/api/spotify/callback")
@@ -20,6 +23,7 @@ from fastapi.testclient import TestClient
 
 from app.database import Base, SessionLocal, engine
 from app.main import app
+from app.rate_limit import limiter
 from app.spotify_client import clear_search_cache
 
 
@@ -36,6 +40,15 @@ def _clear_spotify_search_cache():
     # specific image/owner shape) would silently satisfy a later test's
     # identically-worded search instead of that test's own mock being called.
     clear_search_cache()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    # Otherwise register/login calls from an earlier test (make_user calls
+    # both, for every user it creates) would count against a later test's
+    # budget and start returning 429s for reasons that test never intended.
+    limiter.reset()
     yield
 
 
