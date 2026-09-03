@@ -92,6 +92,37 @@ class TokenOut(BaseModel):
     token_type: str = "bearer"
 
 
+class CommentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    entry_id: int
+    author_id: int
+    author_username: str
+    parent_comment_id: int | None
+    body: str
+    created_at: datetime
+    edited_at: datetime | None
+    # Populated straight from the ORM's own `replies` relationship (already
+    # ordered by created_at), so the tree Pydantic serializes here matches
+    # the tree structure in the database - no separate tree-building step.
+    replies: list["CommentOut"] = []
+
+
+CommentOut.model_rebuild()
+
+
+class CommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+    # None = a top-level comment on the entry; otherwise a reply to another
+    # comment (which may itself be a reply).
+    parent_comment_id: int | None = None
+
+
+class CommentUpdate(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
 class SpotifyStatusOut(BaseModel):
     """Whether the caller has linked a Spotify account. Never includes the
     stored tokens themselves - those are secrets and never leave the server."""

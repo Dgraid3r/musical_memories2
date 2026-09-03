@@ -98,6 +98,9 @@ class JournalEntry(Base):
     images: Mapped[list["EntryImage"]] = relationship(
         back_populates="entry", cascade="all, delete-orphan", order_by="EntryImage.id"
     )
+    comments: Mapped[list["Comment"]] = relationship(
+        back_populates="entry", cascade="all, delete-orphan", order_by="Comment.created_at"
+    )
     tags: Mapped[list["Tag"]] = relationship(secondary=entry_tags, back_populates="entries", order_by="Tag.name")
 
     @property
@@ -113,6 +116,38 @@ class EntryImage(Base):
     filename: Mapped[str] = mapped_column(String, nullable=False)
 
     entry: Mapped["JournalEntry"] = relationship(back_populates="images")
+
+
+class Comment(Base):
+    """A threaded comment on an entry. `parent_comment_id` is what makes it
+    threaded - a null parent is a top-level comment on the entry, a non-null
+    parent is a reply to another comment (which may itself be a reply, so
+    threads can nest arbitrarily deep). `entry_id` is denormalized onto
+    every comment, top-level or reply, so the whole thread for an entry can
+    be fetched with a single flat query."""
+
+    __tablename__ = "comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("journal_entries.id"), nullable=False, index=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    parent_comment_id: Mapped[int | None] = mapped_column(ForeignKey("comments.id"), nullable=True, index=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    entry: Mapped["JournalEntry"] = relationship(back_populates="comments")
+    author: Mapped["User"] = relationship()
+    parent: Mapped["Comment | None"] = relationship(back_populates="replies", remote_side=[id])
+    # Deleting a comment deletes its whole reply subtree with it, same as
+    # deleting an entry deletes all of its comments.
+    replies: Mapped[list["Comment"]] = relationship(
+        back_populates="parent", cascade="all, delete-orphan", order_by="Comment.created_at"
+    )
+
+    @property
+    def author_username(self) -> str:
+        return self.author.username
 
 
 class SpotifyToken(Base):

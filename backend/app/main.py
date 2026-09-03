@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from .routers import entries, sessions, spotify, users  # noqa: E402  (must load after .env)
+from .routers import comments, entries, sessions, spotify, users  # noqa: E402  (must load after .env)
 
 # Schema is owned by Alembic now (see backend/alembic/) - run
 # `alembic upgrade head` before starting the app instead of relying on
@@ -27,6 +27,7 @@ app.mount("/uploads", StaticFiles(directory=Path(__file__).resolve().parent.pare
 app.include_router(users.router)
 app.include_router(sessions.router)
 app.include_router(entries.router)
+app.include_router(comments.router)
 app.include_router(spotify.router)
 
 

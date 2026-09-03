@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from app.database import Base, SessionLocal, engine
 from app.main import app
+from app.spotify_client import clear_search_cache
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +28,15 @@ def _clean_database():
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def _clear_spotify_search_cache():
+    # Otherwise a cached result from one test (e.g. a mocked response with a
+    # specific image/owner shape) would silently satisfy a later test's
+    # identically-worded search instead of that test's own mock being called.
+    clear_search_cache()
+    yield
 
 
 @pytest.fixture

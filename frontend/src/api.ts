@@ -1,4 +1,4 @@
-import type { JournalEntry, PlaylistResult, User, UserPublic } from './types'
+import type { Comment, JournalEntry, PlaylistResult, User, UserPublic } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -108,6 +108,41 @@ export async function searchPlaylists(query: string): Promise<PlaylistResult[]> 
   const res = await fetch(`/api/spotify/playlists?q=${encodeURIComponent(query)}`)
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Playlist search failed'))
   return res.json()
+}
+
+export async function fetchComments(entryId: number, token: string | null): Promise<Comment[]> {
+  const res = await fetch(`/api/entries/${entryId}/comments`, { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load comments'))
+  return res.json()
+}
+
+export async function createComment(
+  entryId: number,
+  input: { body: string; parent_comment_id?: number | null },
+  token: string,
+): Promise<Comment> {
+  const res = await fetch(`/api/entries/${entryId}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to post comment'))
+  return res.json()
+}
+
+export async function updateComment(commentId: number, body: string, token: string): Promise<Comment> {
+  const res = await fetch(`/api/comments/${commentId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ body }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to update comment'))
+  return res.json()
+}
+
+export async function deleteComment(commentId: number, token: string): Promise<void> {
+  const res = await fetch(`/api/comments/${commentId}`, { method: 'DELETE', headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to delete comment'))
 }
 
 export async function fetchSpotifyStatus(token: string): Promise<{ connected: boolean }> {

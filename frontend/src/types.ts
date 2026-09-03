@@ -46,3 +46,15 @@ export interface User {
   email: string
   created_at: string
 }
+
+export interface Comment {
+  id: number
+  entry_id: number
+  author_id: number
+  author_username: string
+  parent_comment_id: number | null
+  body: string
+  created_at: string
+  edited_at: string | null
+  replies: Comment[]
+}
