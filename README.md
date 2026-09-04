@@ -67,13 +67,13 @@ entry's primary author vs. co-authors.
 
 Endpoints: `POST /api/workspaces` (create - you become its owner),
 `GET /api/workspaces` (list your own, with your role in each),
-`GET /api/workspaces/{id}/members`, `POST /api/workspaces/{id}/members`
-(owner-only, add an existing user by username - a stand-in for a real
-invite flow; there's no email-based invite, verification, or password
-reset yet), `DELETE /api/workspaces/{id}/members/{user_id}` (owner-only;
-the owner can't remove themselves this way - delete the whole workspace
-instead), `DELETE /api/workspaces/{id}` (owner-only, cascades to every
-entry/tag/comment in it).
+`GET /api/workspaces/{id}/members`, `DELETE
+/api/workspaces/{id}/members/{user_id}` (owner-only; the owner can't
+remove themselves this way - delete the whole workspace instead),
+`DELETE /api/workspaces/{id}` (owner-only, cascades to every
+entry/tag/comment in it). Joining a workspace is a real, consent-based,
+email invite flow rather than an owner unilaterally adding an existing
+username - see "Invites, email verification, and password reset" below.
 
 Every entry/tag/comment/search endpoint is nested under the workspace:
 `GET/POST /api/workspaces/{id}/entries`, `GET/PATCH/DELETE
@@ -161,6 +161,47 @@ requests. The frontend's login/register screen handles this for you and
 persists the token in the browser. Both endpoints are rate-limited to 5
 attempts/minute per caller IP (see "Security and operations").
 
+## Invites, email verification, and password reset
+
+Creating an account is open to anyone (it's already rate-limited - see
+"Security and operations"); an invite is only required to join a specific
+*workspace*.
+
+- **Workspace invites** — a workspace owner invites by email address:
+  `POST /api/workspaces/{id}/invites` (owner-only; 409s if that email is
+  already a member or already has a pending invite), `GET
+  /api/workspaces/{id}/invites` (owner-only, lists pending invites),
+  `DELETE /api/workspaces/{id}/invites/{invite_id}` (owner-only, revokes
+  before acceptance). Each invite emails an accept link/token that expires
+  after 7 days. `GET /api/invites/{token}` (no auth) previews an invite
+  (workspace name, role, whether the email already has an account) so the
+  frontend can route to login or registration. `POST
+  /api/invites/{token}/accept` (auth required, rate-limited) accepts it -
+  membership is only ever created when the invitee actively accepts, never
+  automatically by the owner. If the invited email doesn't have an account
+  yet, `POST /api/users` (register) optionally takes an `invite_token` and
+  auto-joins the new account to that workspace as part of registration
+  itself, rather than requiring a separate accept step after
+  registering - one flow, not two mechanisms bolted together. An invalid,
+  expired, or mismatched-email invite token passed at registration is
+  silently ignored (registration still succeeds; it just doesn't join a
+  workspace).
+- **Email verification** — registration sends a verification email
+  (`POST /api/account/verify-email/{token}`, no auth, token from the
+  email); `User.email_verified` tracks status (`GET /api/users/me`).
+  **Nothing in the app currently requires verification** - an unverified
+  account logs in and uses every feature normally. `POST
+  /api/account/verify-email/resend` (auth required, rate-limited)
+  re-sends with a fresh token, replacing the previous one.
+- **Password reset** — `POST /api/account/password-reset/request` (no
+  auth, rate-limited, body `{"email": ...}`) always returns the same
+  generic response whether or not that email has an account, so it can't
+  be used to probe which emails are registered. If it does, an emailed
+  token (1 hour) can be submitted via `POST
+  /api/account/password-reset/{token}` (body `{"new_password": ...}`) to
+  set a new password; the token is single-use and requesting a new reset
+  invalidates any earlier still-unused one.
+
 ## Security and operations
 
 - **Spotify tokens encrypted at rest** — `SpotifyToken.access_token`/
@@ -171,13 +212,29 @@ attempts/minute per caller IP (see "Security and operations").
   ```
   (this is a different key format than `JWT_SECRET_KEY` - don't reuse the
   `secrets.token_hex` command for it).
-- **Rate limiting** — `POST /api/sessions` and `POST /api/users` are
-  limited to 5 attempts/minute per caller IP, to blunt brute-forcing and
-  credential stuffing. Returns `429` with a `{"detail": "..."}` body.
+- **Rate limiting** — `POST /api/sessions`, `POST /api/users`, `POST
+  /api/invites/{token}/accept`, `POST /api/account/verify-email/resend`,
+  `POST /api/account/password-reset/request`, and `POST
+  /api/account/password-reset/{token}` are each limited to 5
+  attempts/minute per caller IP (independent budgets - maxing out one
+  doesn't affect another), to blunt brute-forcing and credential
+  stuffing/enumeration. Returns `429` with a `{"detail": "..."}` body.
+  Invite *creation* isn't rate-limited since it's already owner-gated.
 - **Error tracking (optional)** — set `SENTRY_DSN` in `backend/.env` and/or
   `VITE_SENTRY_DSN` in `frontend/.env` to send errors to Sentry. Leaving
   either unset is a complete no-op, not a startup failure - there's no
   Sentry account configured by default.
+- **Outgoing email (optional)** — set `SMTP_HOST` (plus `SMTP_PORT`/
+  `SMTP_USER`/`SMTP_PASSWORD`/`SMTP_FROM_ADDRESS`) in `backend/.env` to
+  send invite, verification, and password-reset emails through any real
+  SMTP provider - a personal Gmail account works fine for local use
+  (`smtp.gmail.com`, port `587`, an
+  [App Password](https://myaccount.google.com/apppasswords) as
+  `SMTP_PASSWORD`). Leaving `SMTP_HOST` unset is the same no-op pattern as
+  `SENTRY_DSN`: nothing fails, sending just logs the email's recipient,
+  subject, and body (including the real link/token) instead of actually
+  delivering it - enough to develop and test invites/verification/reset
+  locally with no mail setup at all.
 - **Structured logging** — the backend logs auth failures/successes,
   Spotify API calls (catalog search and the per-user OAuth client - query,
   cache hit/miss, result counts, refresh events), and other operationally
@@ -186,12 +243,22 @@ attempts/minute per caller IP (see "Security and operations").
 
 ## API
 
-REST resources: `POST /api/users` (register), `GET /api/users/me`,
-`GET /api/users?q=` (global username search), `POST /api/sessions`
-(login).
+REST resources: `POST /api/users` (register, optional `invite_token`),
+`GET /api/users/me`, `GET /api/users?q=` (global username search),
+`POST /api/sessions` (login).
 
-Workspaces: `POST/GET /api/workspaces`, `GET/POST /api/workspaces/{id}/members`,
-`DELETE /api/workspaces/{id}/members/{user_id}`, `DELETE /api/workspaces/{id}`.
+Account: `POST /api/account/verify-email/resend`, `POST
+/api/account/verify-email/{token}`, `POST
+/api/account/password-reset/request`, `POST
+/api/account/password-reset/{token}`.
+
+Workspaces: `POST/GET /api/workspaces`, `GET /api/workspaces/{id}/members`,
+`DELETE /api/workspaces/{id}/members/{user_id}`, `DELETE /api/workspaces/{id}`,
+`POST/GET /api/workspaces/{id}/invites`, `DELETE
+/api/workspaces/{id}/invites/{invite_id}`.
+
+Invites (not workspace-nested - the token alone resolves it): `GET
+/api/invites/{token}` (preview, no auth), `POST /api/invites/{token}/accept`.
 
 Workspace-scoped (see "Workspaces" above - every one of these requires
 membership in `{id}`): `GET/POST /api/workspaces/{id}/entries` (optional
