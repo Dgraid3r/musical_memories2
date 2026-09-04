@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.database import Base, SessionLocal, engine
+from app.email import clear_dev_outbox, last_email_to
 from app.main import app
 from app.rate_limit import limiter
 from app.spotify_client import clear_search_cache
@@ -52,6 +53,16 @@ def _reset_rate_limits():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _clear_email_outbox():
+    # Same reasoning as the search-cache and rate-limiter fixtures above -
+    # otherwise an email "sent" in one test (e.g. to alice@example.com)
+    # would still be sitting in the in-memory outbox for a later test that
+    # sends its own email to the same address and checks last_email_to.
+    clear_dev_outbox()
+    yield
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -71,12 +82,13 @@ def db_session():
 
 @pytest.fixture
 def make_user(client):
-    """Registers + logs in a user, returning {id, username, headers}."""
+    """Registers + logs in a user, returning {id, username, email, headers}."""
 
     def _make(username: str = "alice", password: str = "password123"):
+        email = f"{username}@example.com"
         register_res = client.post(
             "/api/users",
-            json={"username": username, "email": f"{username}@example.com", "password": password},
+            json={"username": username, "email": email, "password": password},
         )
         assert register_res.status_code == 201, register_res.text
         user = register_res.json()
@@ -85,24 +97,39 @@ def make_user(client):
         assert login_res.status_code == 201, login_res.text
         token = login_res.json()["access_token"]
 
-        return {"id": user["id"], "username": username, "headers": {"Authorization": f"Bearer {token}"}}
+        return {
+            "id": user["id"],
+            "username": username,
+            "email": email,
+            "headers": {"Authorization": f"Bearer {token}"},
+        }
 
     return _make
 
 
 @pytest.fixture
 def add_workspace_member(client):
-    """Adds `member` (from make_user) to `workspace` (from make_workspace),
-    as its `owner`. Returns the created WorkspaceMemberOut dict."""
+    """Adds `member` (from make_user, who must already have an account) to
+    `workspace` (from make_workspace), as its `owner` - via the real
+    invite flow (create invite by email, then the invitee accepts),
+    exactly like a real owner+invitee would, rather than a shortcut.
+    Returns the created WorkspaceMemberOut dict."""
 
-    def _add(owner: dict, workspace: dict, member: dict) -> dict:
-        res = client.post(
-            f"/api/workspaces/{workspace['id']}/members",
+    def _add(owner: dict, workspace: dict, member: dict, role: str = "member") -> dict:
+        invite_res = client.post(
+            f"/api/workspaces/{workspace['id']}/invites",
             headers=owner["headers"],
-            json={"username": member["username"]},
+            json={"email": member["email"], "role": role},
         )
-        assert res.status_code == 201, res.text
-        return res.json()
+        assert invite_res.status_code == 201, invite_res.text
+
+        sent = last_email_to(member["email"])
+        assert sent is not None, f"no invite email recorded for {member['email']}"
+        token = sent["token"]
+
+        accept_res = client.post(f"/api/invites/{token}/accept", headers=member["headers"])
+        assert accept_res.status_code == 200, accept_res.text
+        return accept_res.json()
 
     return _add
 

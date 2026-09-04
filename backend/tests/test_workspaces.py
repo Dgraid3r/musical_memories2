@@ -126,66 +126,13 @@ def test_workspace_not_found_returns_404(client, make_user):
 
 
 # --- Membership management ----------------------------------------------
-
-
-def test_add_member_owner_only(client, make_user, make_workspace):
-    alice = make_user("alice")
-    bob = make_user("bob")
-    carol = make_user("carol")
-    ws = make_workspace(alice, bob)
-
-    res = client.post(f"/api/workspaces/{ws['id']}/members", headers=bob["headers"], json={"username": "carol"})
-    assert res.status_code == 403
-
-    # carol was not actually added
-    res = client.get(f"/api/workspaces/{ws['id']}/members", headers=alice["headers"])
-    assert "carol" not in {m["username"] for m in res.json()}
-
-
-def test_add_member_not_a_workspace_member_returns_404(client, make_user, make_workspace):
-    alice = make_user("alice")
-    outsider = make_user("outsider")
-    carol = make_user("carol")
-    ws = make_workspace(alice)
-
-    res = client.post(f"/api/workspaces/{ws['id']}/members", headers=outsider["headers"], json={"username": "carol"})
-    assert res.status_code == 404
-
-
-def test_add_member_unknown_username_404(client, make_user, make_workspace):
-    alice = make_user("alice")
-    ws = make_workspace(alice)
-
-    res = client.post(f"/api/workspaces/{ws['id']}/members", headers=alice["headers"], json={"username": "ghost"})
-    assert res.status_code == 404
-
-
-def test_add_member_already_a_member_conflicts(client, make_user, make_workspace):
-    alice = make_user("alice")
-    bob = make_user("bob")
-    ws = make_workspace(alice, bob)
-
-    res = client.post(f"/api/workspaces/{ws['id']}/members", headers=alice["headers"], json={"username": "bob"})
-    assert res.status_code == 409
-
-
-def test_add_member_succeeds_and_new_member_gets_access(client, make_user, make_workspace):
-    alice = make_user("alice")
-    bob = make_user("bob")
-    ws = make_workspace(alice)
-    _create_entry(client, ws["id"], alice["headers"], is_public=True)
-
-    # bob can't see it yet.
-    res = client.get(f"/api/workspaces/{ws['id']}/entries", headers=bob["headers"])
-    assert res.status_code == 404
-
-    add_res = client.post(f"/api/workspaces/{ws['id']}/members", headers=alice["headers"], json={"username": "bob"})
-    assert add_res.status_code == 201
-    assert add_res.json() == {"user_id": bob["id"], "username": "bob", "role": "member"}
-
-    res = client.get(f"/api/workspaces/{ws['id']}/entries", headers=bob["headers"])
-    assert res.status_code == 200
-    assert len(res.json()) == 1
+#
+# Adding a member is now a real, email-based, consent-required invite flow
+# rather than an owner unilaterally adding an existing username - see
+# test_invites.py for that flow's own thorough coverage (accept as an
+# existing user, accept via registration, expiry, revocation, roles,
+# already-a-member handling, etc.). What remains here is the membership
+# roster/removal endpoints, which are unchanged.
 
 
 def test_list_members_requires_membership(client, make_user, make_workspace):
