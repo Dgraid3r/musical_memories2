@@ -73,6 +73,15 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_.-]+$")
     email: EmailStr
     password: str = Field(min_length=8, max_length=256)
+    # Set when registering from a "join this workspace" invite link whose
+    # email had no existing account. If it matches a still-pending invite
+    # for this same email, registration also creates that workspace
+    # membership - one flow, not a separate step the new user has to
+    # remember to go back and do. Silently ignored (registration still
+    # succeeds) if the token is missing, expired, already used, or for a
+    # different email - a broken invite link must never block someone
+    # from creating an account.
+    invite_token: str | None = None
 
 
 class UserOut(BaseModel):
@@ -81,6 +90,7 @@ class UserOut(BaseModel):
     id: int
     username: str
     email: str
+    email_verified: bool
     created_at: datetime
 
 
@@ -169,10 +179,6 @@ class WorkspaceVisibilityUpdate(BaseModel):
     visibility: Literal["public", "private"]
 
 
-class WorkspaceMemberAdd(BaseModel):
-    username: str
-
-
 class WorkspaceMemberOut(BaseModel):
     user_id: int
     username: str
@@ -182,3 +188,55 @@ class WorkspaceMemberOut(BaseModel):
 class WorkspaceMemberRoleUpdate(BaseModel):
     # Deliberately excludes "owner" - there's no ownership-transfer flow.
     role: Literal["member", "subscriber"]
+
+
+class WorkspaceInviteCreate(BaseModel):
+    email: EmailStr
+    role: Literal["member", "subscriber"] = "member"
+
+
+class WorkspaceInviteOut(BaseModel):
+    """Never includes the token itself - that only ever leaves the server
+    inside the emailed link, the same way a Spotify token never leaves the
+    server in a response body."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    role: str
+    created_at: datetime
+    expires_at: datetime
+
+
+class WorkspaceInvitePreviewOut(BaseModel):
+    """What GET /api/invites/{token} shows before the invitee has logged in
+    or registered - enough to render "You've been invited to join X as a
+    <role>" and to decide whether to show a login form or a registration
+    form."""
+
+    workspace_id: int
+    workspace_name: str
+    email: str
+    role: str
+    expires_at: datetime
+    account_exists: bool
+
+
+class EmailVerificationResendOut(BaseModel):
+    detail: str
+
+
+class PasswordResetRequestInput(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetRequestOut(BaseModel):
+    """Always the same message whether or not the email belongs to an
+    account - see PasswordResetRequestInput's router for why."""
+
+    detail: str
+
+
+class PasswordResetConfirmInput(BaseModel):
+    new_password: str = Field(min_length=8, max_length=256)
