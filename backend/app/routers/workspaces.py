@@ -19,6 +19,7 @@ from ..schemas import (
     WorkspaceMemberOut,
     WorkspaceMemberRoleUpdate,
     WorkspaceOut,
+    WorkspaceTransferOwnershipInput,
     WorkspaceVisibilityUpdate,
 )
 
@@ -309,6 +310,61 @@ def revoke_invite(
     logger.info("workspace.invite_revoked workspace_id=%s invite_id=%s by=%s", workspace_id, invite_id, current_user.id)
 
 
+@router.patch("/{workspace_id}/transfer-ownership", response_model=WorkspaceOut)
+def transfer_ownership(
+    workspace_id: int,
+    payload: WorkspaceTransferOwnershipInput,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Owner-only. Hands ownership to another existing member, atomically:
+    the old owner's role becomes "member" and the target's becomes
+    "owner" in the same transaction, so a workspace is never left without
+    an owner (or with two). The target must already be a member - not a
+    pending invite, not a stranger - since this is meant for already-
+    trusted collaborators handing off control between themselves, unlike
+    the invite flow. Unlike an invite, this takes effect immediately with
+    no accept step from the new owner: both parties are already inside
+    the workspace and this is a decision the current owner alone is
+    trusted to make.
+
+    Returns the *caller's* own WorkspaceOut (now role="member"), the same
+    shape update_workspace_visibility returns - the frontend uses it to
+    refresh its own view of this workspace without a second round trip."""
+    workspace = require_workspace_owner(workspace_id, db, current_user)
+
+    if payload.new_owner_user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You are already the owner of this workspace")
+
+    target_membership = db.scalar(
+        select(WorkspaceMembership).where(
+            WorkspaceMembership.workspace_id == workspace_id,
+            WorkspaceMembership.user_id == payload.new_owner_user_id,
+        )
+    )
+    if target_membership is None:
+        raise HTTPException(status_code=404, detail="That user is not a member of this workspace")
+
+    current_owner_membership = _get_membership(workspace_id, current_user, db)
+    current_owner_membership.role = "member"
+    target_membership.role = "owner"
+    db.commit()
+    db.refresh(workspace)
+
+    logger.warning(
+        "workspace.ownership_transferred workspace_id=%s from_user_id=%s to_user_id=%s",
+        workspace_id, current_user.id, payload.new_owner_user_id,
+    )
+    return WorkspaceOut(
+        id=workspace.id,
+        name=workspace.name,
+        visibility=workspace.visibility,
+        created_at=workspace.created_at,
+        created_by=workspace.created_by,
+        role="member",
+    )
+
+
 @router.patch("/{workspace_id}/members/{user_id}", response_model=WorkspaceMemberOut)
 def update_member_role(
     workspace_id: int,
@@ -318,10 +374,12 @@ def update_member_role(
     current_user: User = Depends(get_current_user),
 ):
     """Owner-only. Sets a member to "member" (full read/write collaborator)
-    or "subscriber" (read-only) - not "owner", there's no ownership-
-    transfer flow. The owner can't change their own role this way, for the
-    same reason they can't remove themselves via the endpoint below: it
-    would leave the workspace without an owner with no way to recover."""
+    or "subscriber" (read-only) - not "owner"; promoting a member all the
+    way to owner goes through transfer_ownership above instead, which also
+    demotes the previous owner atomically. The owner can't change their
+    own role this way, for the same reason they can't remove themselves
+    via the endpoint below: it would leave the workspace without an owner
+    with no way to recover."""
     require_workspace_owner(workspace_id, db, current_user)
 
     if user_id == current_user.id:
@@ -351,10 +409,10 @@ def remove_member(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Owner-only. The owner can't remove themselves this way - there's no
-    ownership-transfer flow, so that would either orphan the workspace or
-    silently strand it without an owner; deleting the whole workspace is
-    the explicit action for that instead."""
+    """Owner-only. The owner can't remove themselves this way - that would
+    leave the workspace without an owner. Transfer ownership first (see
+    transfer_ownership above) if someone else should take over, or delete
+    the whole workspace if it should end entirely."""
     require_workspace_owner(workspace_id, db, current_user)
 
     if user_id == current_user.id:

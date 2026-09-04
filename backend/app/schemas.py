@@ -186,8 +186,15 @@ class WorkspaceMemberOut(BaseModel):
 
 
 class WorkspaceMemberRoleUpdate(BaseModel):
-    # Deliberately excludes "owner" - there's no ownership-transfer flow.
+    # Deliberately excludes "owner" - promoting a member all the way to
+    # owner goes through the dedicated transfer-ownership endpoint below
+    # instead, which also demotes the previous owner atomically so a
+    # workspace never ends up with zero or two owners.
     role: Literal["member", "subscriber"]
+
+
+class WorkspaceTransferOwnershipInput(BaseModel):
+    new_owner_user_id: int
 
 
 class WorkspaceInviteCreate(BaseModel):
