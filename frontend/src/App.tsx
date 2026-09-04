@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react'
-import { deleteEntry, fetchEntries } from './api'
+import { ApiError, confirmEmailVerification, deleteEntry, fetchEntries, previewInvite } from './api'
 import { useAuth } from './auth/AuthContext'
 import AuthForm from './components/AuthForm'
 import EntryCard from './components/EntryCard'
+import ForgotPasswordPage from './components/ForgotPasswordPage'
+import InviteAcceptPrompt from './components/InviteAcceptPrompt'
 import NewEntryForm from './components/NewEntryForm'
 import PublicWorkspaceBrowser from './components/PublicWorkspaceBrowser'
+import ResetPasswordPage from './components/ResetPasswordPage'
 import SearchBar from './components/SearchBar'
 import SpotifyConnect from './components/SpotifyConnect'
+import VerifyEmailBanner from './components/VerifyEmailBanner'
 import WorkspaceSettings from './components/WorkspaceSettings'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher'
-import type { JournalEntry } from './types'
+import type { InvitePreview, JournalEntry } from './types'
 import { useWorkspace } from './workspace/WorkspaceContext'
 import './App.css'
 
@@ -34,16 +38,86 @@ function useSpotifyCallbackNotice(): string | null {
   return notice
 }
 
+/** Reads a query param exactly once on first mount and strips it from the
+ * URL, the same one-shot pattern as useSpotifyCallbackNotice - used for
+ * ?invite=, ?verify=, and ?reset= links landed on from an email. */
+function useOneShotUrlParam(name: string): string | null {
+  const [value] = useState<string | null>(() => new URLSearchParams(window.location.search).get(name))
+
+  useEffect(() => {
+    if (!value) return
+    const params = new URLSearchParams(window.location.search)
+    params.delete(name)
+    const rest = params.toString()
+    window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''))
+    // Only ever needs to run once, right after mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return value
+}
+
 export default function App() {
   const { user, token, loading: authLoading, logout } = useAuth()
-  const { activeWorkspace, loading: workspaceLoading, error: workspaceError } = useWorkspace()
+  const { activeWorkspace, loading: workspaceLoading, error: workspaceError, refresh: refreshWorkspaces } =
+    useWorkspace()
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showPublicBrowser, setShowPublicBrowser] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showForgotPassword, setShowForgotPassword] = useState(false)
   const spotifyNotice = useSpotifyCallbackNotice()
+
+  // --- Workspace invite accept flow (?invite=TOKEN) ------------------
+  const inviteTokenFromUrl = useOneShotUrlParam('invite')
+  const [inviteToken, setInviteToken] = useState(inviteTokenFromUrl)
+  const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null)
+  const [inviteError, setInviteError] = useState<string | null>(null)
+  const [inviteAcceptedNotice, setInviteAcceptedNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!inviteToken) return
+    previewInvite(inviteToken)
+      .then(setInvitePreview)
+      .catch((err) => {
+        setInviteError(err instanceof ApiError ? err.message : 'This invite link is not valid.')
+        setInviteToken(null)
+      })
+  }, [inviteToken])
+
+  function handleInviteAccepted() {
+    setInviteAcceptedNotice(`You've joined "${invitePreview?.workspace_name}".`)
+    setInviteToken(null)
+    setInvitePreview(null)
+    refreshWorkspaces()
+  }
+
+  function dismissInvite() {
+    setInviteToken(null)
+    setInvitePreview(null)
+  }
+
+  // --- Email verification (?verify=TOKEN) -----------------------------
+  const verifyToken = useOneShotUrlParam('verify')
+  const [verifyNotice, setVerifyNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!verifyToken) return
+    confirmEmailVerification(verifyToken)
+      .then(() => setVerifyNotice('Your email address has been verified.'))
+      .catch((err) =>
+        setVerifyNotice(
+          err instanceof ApiError ? err.message : 'This verification link is invalid or has expired.',
+        ),
+      )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifyToken])
+
+  // --- Password reset (?reset=TOKEN) - its own standalone page --------
+  const resetTokenFromUrl = useOneShotUrlParam('reset')
+  const [resetToken, setResetToken] = useState(resetTokenFromUrl)
 
   useEffect(() => {
     if (authLoading || !activeWorkspace) return
@@ -66,14 +140,49 @@ export default function App() {
 
   if (authLoading) return null
 
+  if (resetToken) {
+    return <ResetPasswordPage token={resetToken} onDone={() => setResetToken(null)} />
+  }
+
   if (showPublicBrowser) {
     return <PublicWorkspaceBrowser onClose={() => setShowPublicBrowser(false)} />
   }
 
+  // A logged-in user (whether they just registered/logged in to accept
+  // this invite, or already had a session open and clicked the link)
+  // confirms joining explicitly here - acceptance is never automatic.
+  if (user && inviteToken && invitePreview) {
+    return (
+      <InviteAcceptPrompt
+        token={inviteToken}
+        preview={invitePreview}
+        onAccepted={handleInviteAccepted}
+        onDismiss={dismissInvite}
+      />
+    )
+  }
+
   if (!user) {
+    if (showForgotPassword) {
+      return <ForgotPasswordPage onBackToLogin={() => setShowForgotPassword(false)} />
+    }
     return (
       <>
-        <AuthForm />
+        {invitePreview && (
+          <p className="hint invite-banner">
+            You've been invited to join <strong>{invitePreview.workspace_name}</strong> as a{' '}
+            <strong>{invitePreview.role}</strong> -{' '}
+            {invitePreview.account_exists ? 'log in to accept.' : 'create an account below to accept.'}
+          </p>
+        )}
+        {inviteError && <p className="error invite-banner">{inviteError}</p>}
+        {verifyNotice && <p className="hint">{verifyNotice}</p>}
+        <AuthForm
+          inviteToken={invitePreview && !invitePreview.account_exists ? inviteToken ?? undefined : undefined}
+          prefillEmail={invitePreview && !invitePreview.account_exists ? invitePreview.email : undefined}
+          initialMode={invitePreview ? (invitePreview.account_exists ? 'login' : 'register') : undefined}
+          onForgotPassword={() => setShowForgotPassword(true)}
+        />
         <p className="public-browse-link">
           <button type="button" className="link-btn" onClick={() => setShowPublicBrowser(true)}>
             Browse public journals without logging in
@@ -117,6 +226,10 @@ export default function App() {
       </header>
 
       {spotifyNotice && <p className="hint spotify-notice">{spotifyNotice}</p>}
+      {verifyNotice && <p className="hint spotify-notice">{verifyNotice}</p>}
+      {inviteAcceptedNotice && <p className="hint spotify-notice">{inviteAcceptedNotice}</p>}
+      {inviteError && <p className="error spotify-notice">{inviteError}</p>}
+      <VerifyEmailBanner />
 
       {showSettings && activeWorkspace && <WorkspaceSettings onClose={() => setShowSettings(false)} />}
 

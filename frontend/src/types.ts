@@ -45,6 +45,7 @@ export interface User {
   id: number
   username: string
   email: string
+  email_verified: boolean
   created_at: string
 }
 
@@ -86,4 +87,24 @@ export interface PublicWorkspace {
   id: number
   name: string
   created_at: string
+}
+
+export interface WorkspaceInvite {
+  id: number
+  email: string
+  role: WorkspaceRole
+  created_at: string
+  expires_at: string
+}
+
+// The public preview shown before an invite is accepted - never includes
+// the token itself, and account_exists tells the frontend whether to
+// route the invitee to login or to registration.
+export interface InvitePreview {
+  workspace_id: number
+  workspace_name: string
+  email: string
+  role: WorkspaceRole
+  expires_at: string
+  account_exists: boolean
 }

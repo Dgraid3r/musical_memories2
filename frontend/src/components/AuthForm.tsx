@@ -2,11 +2,22 @@ import { useState } from 'react'
 import { ApiError } from '../api'
 import { useAuth } from '../auth/AuthContext'
 
-export default function AuthForm() {
+interface Props {
+  // Set when arriving via a workspace invite link - passed through to
+  // registration so a brand-new account joins the workspace as part of the
+  // same request, and email is locked/prefilled since the invite was sent
+  // to a specific address.
+  inviteToken?: string
+  prefillEmail?: string
+  initialMode?: 'login' | 'register'
+  onForgotPassword?: () => void
+}
+
+export default function AuthForm({ inviteToken, prefillEmail, initialMode, onForgotPassword }: Props) {
   const { login, register } = useAuth()
-  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [mode, setMode] = useState<'login' | 'register'>(initialMode ?? 'login')
   const [username, setUsername] = useState('')
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(prefillEmail ?? '')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -19,7 +30,7 @@ export default function AuthForm() {
       if (mode === 'login') {
         await login(username, password)
       } else {
-        await register(username, email, password)
+        await register(username, email, password, inviteToken)
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong')
@@ -45,6 +56,7 @@ export default function AuthForm() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              readOnly={!!prefillEmail}
               required
             />
           </>
@@ -66,16 +78,24 @@ export default function AuthForm() {
           {submitting ? 'Please wait...' : mode === 'login' ? 'Log in' : 'Create account'}
         </button>
 
-        <button
-          type="button"
-          className="link-btn"
-          onClick={() => {
-            setMode(mode === 'login' ? 'register' : 'login')
-            setError(null)
-          }}
-        >
-          {mode === 'login' ? "Need an account? Register" : 'Already have an account? Log in'}
-        </button>
+        {mode === 'login' && onForgotPassword && (
+          <button type="button" className="link-btn" onClick={onForgotPassword}>
+            Forgot your password?
+          </button>
+        )}
+
+        {!prefillEmail && (
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              setMode(mode === 'login' ? 'register' : 'login')
+              setError(null)
+            }}
+          >
+            {mode === 'login' ? "Need an account? Register" : 'Already have an account? Log in'}
+          </button>
+        )}
       </form>
     </div>
   )

@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
 import {
   ApiError,
-  addWorkspaceMember,
+  createWorkspaceInvite,
+  fetchWorkspaceInvites,
   fetchWorkspaceMembers,
   removeWorkspaceMember,
+  revokeWorkspaceInvite,
   updateWorkspaceMemberRole,
   updateWorkspaceVisibility,
 } from '../api'
 import { useAuth } from '../auth/AuthContext'
-import type { WorkspaceMember, WorkspaceRole } from '../types'
+import type { WorkspaceInvite, WorkspaceMember, WorkspaceRole } from '../types'
 import { useWorkspace } from '../workspace/WorkspaceContext'
 
 interface Props {
@@ -19,21 +21,30 @@ export default function WorkspaceSettings({ onClose }: Props) {
   const { token, user } = useAuth()
   const { activeWorkspace, refresh } = useWorkspace()
   const [members, setMembers] = useState<WorkspaceMember[]>([])
+  const [invites, setInvites] = useState<WorkspaceInvite[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [togglingVisibility, setTogglingVisibility] = useState(false)
-  const [newUsername, setNewUsername] = useState('')
-  const [addingMember, setAddingMember] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<Extract<WorkspaceRole, 'member' | 'subscriber'>>('member')
+  const [sendingInvite, setSendingInvite] = useState(false)
 
   const isOwner = activeWorkspace?.role === 'owner'
 
   useEffect(() => {
     if (!activeWorkspace || !token) return
     setLoading(true)
-    fetchWorkspaceMembers(activeWorkspace.id, token)
-      .then(setMembers)
+    Promise.all([
+      fetchWorkspaceMembers(activeWorkspace.id, token),
+      isOwner ? fetchWorkspaceInvites(activeWorkspace.id, token) : Promise.resolve([]),
+    ])
+      .then(([memberList, inviteList]) => {
+        setMembers(memberList)
+        setInvites(inviteList)
+      })
       .catch(() => setError('Could not load members.'))
       .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspace, token])
 
   if (!activeWorkspace) return null
@@ -56,19 +67,30 @@ export default function WorkspaceSettings({ onClose }: Props) {
     }
   }
 
-  async function handleAddMember(e: React.FormEvent) {
+  async function handleSendInvite(e: React.FormEvent) {
     e.preventDefault()
-    if (!token || !activeWorkspace || !newUsername.trim()) return
-    setAddingMember(true)
+    if (!token || !activeWorkspace || !inviteEmail.trim()) return
+    setSendingInvite(true)
     setError(null)
     try {
-      const member = await addWorkspaceMember(activeWorkspace.id, newUsername.trim(), token)
-      setMembers((prev) => [...prev, member])
-      setNewUsername('')
+      const invite = await createWorkspaceInvite(activeWorkspace.id, inviteEmail.trim(), inviteRole, token)
+      setInvites((prev) => [invite, ...prev])
+      setInviteEmail('')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not add member.')
+      setError(err instanceof ApiError ? err.message : 'Could not send invite.')
     } finally {
-      setAddingMember(false)
+      setSendingInvite(false)
+    }
+  }
+
+  async function handleRevokeInvite(inviteId: number) {
+    if (!token || !activeWorkspace) return
+    setError(null)
+    try {
+      await revokeWorkspaceInvite(activeWorkspace.id, inviteId, token)
+      setInvites((prev) => prev.filter((i) => i.id !== inviteId))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not revoke invite.')
     }
   }
 
@@ -148,17 +170,42 @@ export default function WorkspaceSettings({ onClose }: Props) {
         </ul>
 
         {isOwner && (
-          <form className="workspace-add-member-form" onSubmit={handleAddMember}>
-            <input
-              type="text"
-              placeholder="Add member by username..."
-              value={newUsername}
-              onChange={(e) => setNewUsername(e.target.value)}
-            />
-            <button type="submit" disabled={addingMember || !newUsername.trim()}>
-              {addingMember ? 'Adding...' : 'Add'}
-            </button>
-          </form>
+          <>
+            <h3>Pending invites</h3>
+            {invites.length === 0 && <p className="hint">No pending invites.</p>}
+            <ul className="workspace-member-list">
+              {invites.map((invite) => (
+                <li key={invite.id}>
+                  <span>
+                    {invite.email} <span className="workspace-member-role">({invite.role})</span>
+                  </span>
+                  <button type="button" className="link-btn" onClick={() => handleRevokeInvite(invite.id)}>
+                    Revoke
+                  </button>
+                </li>
+              ))}
+            </ul>
+
+            <form className="workspace-add-member-form" onSubmit={handleSendInvite}>
+              <input
+                type="email"
+                placeholder="Invite by email..."
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+              />
+              <select
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value as 'member' | 'subscriber')}
+                aria-label="Invited role"
+              >
+                <option value="member">Member (read/write)</option>
+                <option value="subscriber">Subscriber (read-only)</option>
+              </select>
+              <button type="submit" disabled={sendingInvite || !inviteEmail.trim()}>
+                {sendingInvite ? 'Sending...' : 'Invite'}
+              </button>
+            </form>
+          </>
         )}
       </div>
     </div>

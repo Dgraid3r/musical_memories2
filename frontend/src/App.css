@@ -698,6 +698,32 @@ body {
   padding: 14px 16px;
 }
 
+.verify-email-banner {
+  background: #1e1e1e;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.verify-email-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.invite-banner {
+  background: #1e1e1e;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 0 0 12px;
+  max-width: 360px;
+}
+
 .workspace-settings-overlay {
   position: fixed;
   inset: 0;
