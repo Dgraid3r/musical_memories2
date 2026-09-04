@@ -13,7 +13,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from .logging_config import configure_logging  # noqa: E402  (must load after .env)
 from .rate_limit import limiter  # noqa: E402
 from .sentry_config import configure_sentry  # noqa: E402
-from .routers import comments, entries, sessions, spotify, users, workspaces  # noqa: E402
+from .routers import account, comments, entries, invites, sessions, spotify, users, workspaces  # noqa: E402
 
 configure_logging()
 configure_sentry()
@@ -47,7 +47,9 @@ app.mount("/uploads", StaticFiles(directory=Path(__file__).resolve().parent.pare
 
 app.include_router(users.router)
 app.include_router(sessions.router)
+app.include_router(account.router)
 app.include_router(workspaces.router)
+app.include_router(invites.router)
 app.include_router(entries.router)
 app.include_router(comments.router)
 app.include_router(spotify.router)

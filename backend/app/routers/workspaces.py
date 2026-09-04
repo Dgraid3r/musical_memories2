@@ -1,4 +1,7 @@
 import logging
+import os
+import secrets
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -6,11 +9,13 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import User, Workspace, WorkspaceMembership
+from ..email import send_email
+from ..models import User, Workspace, WorkspaceInvite, WorkspaceMembership
 from ..schemas import (
     PublicWorkspaceOut,
     WorkspaceCreate,
-    WorkspaceMemberAdd,
+    WorkspaceInviteCreate,
+    WorkspaceInviteOut,
     WorkspaceMemberOut,
     WorkspaceMemberRoleUpdate,
     WorkspaceOut,
@@ -22,6 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 
 WRITE_ROLES = ("owner", "member")
+INVITE_EXPIRE_DAYS = 7
 
 
 def _get_membership(workspace_id: int, current_user: User, db: Session) -> WorkspaceMembership | None:
@@ -88,6 +94,21 @@ def require_workspace_owner(workspace_id: int, db: Session, current_user: User) 
     if membership.role != "owner":
         raise HTTPException(status_code=403, detail="Only the workspace owner can do this")
     return membership.workspace
+
+
+def _frontend_url() -> str:
+    return os.environ.get("FRONTEND_URL", "http://localhost:5173")
+
+
+def _send_invite_email(invite: WorkspaceInvite, workspace: Workspace, inviter: User) -> None:
+    link = f"{_frontend_url()}/?invite={invite.token}"
+    body = (
+        f"{inviter.username} has invited you to join the \"{workspace.name}\" workspace on "
+        f"Musical Memories as a {invite.role}.\n\n"
+        f"Accept the invite: {link}\n\n"
+        f"This invite expires on {invite.expires_at.strftime('%Y-%m-%d')}."
+    )
+    send_email(invite.email, f"You're invited to join \"{workspace.name}\"", body, token=invite.token)
 
 
 @router.get("/public", response_model=list[PublicWorkspaceOut])
@@ -197,32 +218,95 @@ def list_members(
     return [WorkspaceMemberOut(user_id=m.user_id, username=m.user.username, role=m.role) for m in memberships]
 
 
-@router.post("/{workspace_id}/members", response_model=WorkspaceMemberOut, status_code=201)
-def add_member(
+@router.post("/{workspace_id}/invites", response_model=WorkspaceInviteOut, status_code=201)
+def create_invite(
     workspace_id: int,
-    payload: WorkspaceMemberAdd,
+    payload: WorkspaceInviteCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Owner-only. A stand-in for a real invite flow (email invites,
-    verification, etc. are explicitly out of scope for now) - adds an
-    existing user to the workspace by username, immediately, with no
-    acceptance step. Always starts as "member"; use the role-update
-    endpoint below to make them a "subscriber" instead."""
-    require_workspace_owner(workspace_id, db, current_user)
+    """Owner-only. Joining a workspace is consent-based: this creates a
+    pending invite and emails it - it does not add anyone to the
+    workspace by itself. The invitee has to accept it (see
+    routers/invites.py), either by logging into an existing account or by
+    registering a new one with this same email."""
+    workspace = require_workspace_owner(workspace_id, db, current_user)
+    email = payload.email.lower()
 
-    user = db.scalar(select(User).where(User.username == payload.username))
-    if user is None:
-        raise HTTPException(status_code=404, detail="No user with that username")
+    existing_user = db.scalar(select(User).where(User.email.ilike(email)))
+    if existing_user is not None and _get_membership(workspace_id, existing_user, db) is not None:
+        raise HTTPException(status_code=409, detail="That person is already a member of this workspace")
 
-    if _get_membership(workspace_id, user, db) is not None:
-        raise HTTPException(status_code=409, detail="That user is already a member of this workspace")
+    pending = db.scalar(
+        select(WorkspaceInvite).where(
+            WorkspaceInvite.workspace_id == workspace_id,
+            WorkspaceInvite.email.ilike(email),
+            WorkspaceInvite.accepted_at.is_(None),
+            WorkspaceInvite.revoked_at.is_(None),
+            WorkspaceInvite.expires_at > datetime.utcnow(),
+        )
+    )
+    if pending is not None:
+        raise HTTPException(status_code=409, detail="An invite is already pending for that email")
 
-    membership = WorkspaceMembership(workspace_id=workspace_id, user_id=user.id, role="member")
-    db.add(membership)
+    invite = WorkspaceInvite(
+        workspace_id=workspace_id,
+        email=email,
+        role=payload.role,
+        token=secrets.token_urlsafe(32),
+        invited_by=current_user.id,
+        expires_at=datetime.utcnow() + timedelta(days=INVITE_EXPIRE_DAYS),
+    )
+    db.add(invite)
     db.commit()
-    logger.info("workspace.member_added workspace_id=%s user_id=%s by=%s", workspace_id, user.id, current_user.id)
-    return WorkspaceMemberOut(user_id=user.id, username=user.username, role="member")
+    db.refresh(invite)
+
+    _send_invite_email(invite, workspace, current_user)
+    logger.info("workspace.invite_created workspace_id=%s email=%r role=%s by=%s", workspace_id, email, payload.role, current_user.id)
+    return invite
+
+
+@router.get("/{workspace_id}/invites", response_model=list[WorkspaceInviteOut])
+def list_invites(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Owner-only. Only ever shows invites that are still actually
+    actionable - accepted or revoked ones drop off this list (the
+    membership itself, or its absence, is the durable record at that
+    point)."""
+    require_workspace_owner(workspace_id, db, current_user)
+    stmt = (
+        select(WorkspaceInvite)
+        .where(
+            WorkspaceInvite.workspace_id == workspace_id,
+            WorkspaceInvite.accepted_at.is_(None),
+            WorkspaceInvite.revoked_at.is_(None),
+        )
+        .order_by(WorkspaceInvite.created_at.desc())
+    )
+    return db.scalars(stmt).all()
+
+
+@router.delete("/{workspace_id}/invites/{invite_id}", status_code=204)
+def revoke_invite(
+    workspace_id: int,
+    invite_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Owner-only. A revoked invite's token stops working immediately -
+    see routers/invites.py's accept endpoint."""
+    require_workspace_owner(workspace_id, db, current_user)
+    invite = db.get(WorkspaceInvite, invite_id)
+    if invite is None or invite.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite.accepted_at is not None:
+        raise HTTPException(status_code=409, detail="That invite has already been accepted")
+    invite.revoked_at = datetime.utcnow()
+    db.commit()
+    logger.info("workspace.invite_revoked workspace_id=%s invite_id=%s by=%s", workspace_id, invite_id, current_user.id)
 
 
 @router.patch("/{workspace_id}/members/{user_id}", response_model=WorkspaceMemberOut)
@@ -297,9 +381,10 @@ def delete_workspace(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Owner-only. Cascades to every entry, tag, and comment in the
-    workspace (see the cascade="all, delete-orphan" relationships in
-    models.py) - this is genuinely destructive and irreversible."""
+    """Owner-only. Cascades to every entry, tag, comment, and pending
+    invite in the workspace (see the cascade="all, delete-orphan"
+    relationships in models.py) - this is genuinely destructive and
+    irreversible."""
     workspace = require_workspace_owner(workspace_id, db, current_user)
     db.delete(workspace)
     db.commit()

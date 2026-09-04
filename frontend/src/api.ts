@@ -1,11 +1,13 @@
 import type {
   Comment,
+  InvitePreview,
   JournalEntry,
   PlaylistResult,
   PublicWorkspace,
   User,
   UserPublic,
   Workspace,
+  WorkspaceInvite,
   WorkspaceMember,
   WorkspaceRole,
   WorkspaceVisibility,
@@ -33,11 +35,16 @@ function authHeaders(token: string | null): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-export async function registerUser(username: string, email: string, password: string): Promise<User> {
+export async function registerUser(
+  username: string,
+  email: string,
+  password: string,
+  inviteToken?: string,
+): Promise<User> {
   const res = await fetch('/api/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, email, password }),
+    body: JSON.stringify({ username, email, password, invite_token: inviteToken || undefined }),
   })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Could not create account'))
   return res.json()
@@ -117,17 +124,83 @@ export async function fetchWorkspaceMembers(workspaceId: number, token: string):
   return res.json()
 }
 
-export async function addWorkspaceMember(
+export async function fetchWorkspaceInvites(workspaceId: number, token: string): Promise<WorkspaceInvite[]> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/invites`, { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load pending invites'))
+  return res.json()
+}
+
+export async function createWorkspaceInvite(
   workspaceId: number,
-  username: string,
+  email: string,
+  role: Extract<WorkspaceRole, 'member' | 'subscriber'>,
   token: string,
-): Promise<WorkspaceMember> {
-  const res = await fetch(`/api/workspaces/${workspaceId}/members`, {
+): Promise<WorkspaceInvite> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/invites`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify({ username }),
+    body: JSON.stringify({ email, role }),
   })
-  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to add member'))
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to send invite'))
+  return res.json()
+}
+
+export async function revokeWorkspaceInvite(workspaceId: number, inviteId: number, token: string): Promise<void> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/invites/${inviteId}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to revoke invite'))
+}
+
+// --- Invite accept flow (not workspace-nested - the token resolves it) ---
+
+export async function previewInvite(inviteToken: string): Promise<InvitePreview> {
+  const res = await fetch(`/api/invites/${encodeURIComponent(inviteToken)}`)
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'This invite link is not valid'))
+  return res.json()
+}
+
+export async function acceptInvite(inviteToken: string, token: string): Promise<WorkspaceMember> {
+  const res = await fetch(`/api/invites/${encodeURIComponent(inviteToken)}/accept`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Could not accept invite'))
+  return res.json()
+}
+
+// --- Account: email verification and password reset ----------------------
+
+export async function resendVerificationEmail(token: string): Promise<{ detail: string }> {
+  const res = await fetch('/api/account/verify-email/resend', { method: 'POST', headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to resend verification email'))
+  return res.json()
+}
+
+export async function confirmEmailVerification(verifyToken: string): Promise<User> {
+  const res = await fetch(`/api/account/verify-email/${encodeURIComponent(verifyToken)}`, { method: 'POST' })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'This verification link is not valid'))
+  return res.json()
+}
+
+export async function requestPasswordReset(email: string): Promise<{ detail: string }> {
+  const res = await fetch('/api/account/password-reset/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to request password reset'))
+  return res.json()
+}
+
+export async function confirmPasswordReset(resetToken: string, newPassword: string): Promise<{ detail: string }> {
+  const res = await fetch(`/api/account/password-reset/${encodeURIComponent(resetToken)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_password: newPassword }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'This reset link is not valid'))
   return res.json()
 }
 

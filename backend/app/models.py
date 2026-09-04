@@ -44,6 +44,10 @@ class User(Base):
     username: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     hashed_password: Mapped[str] = mapped_column(String, nullable=False)
+    # Tracked, but never enforced against core app usage - a freshly
+    # registered, unverified user can log in and use the app normally.
+    # See EmailVerificationToken.
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     entries: Mapped[list["JournalEntry"]] = relationship(
@@ -56,6 +60,12 @@ class User(Base):
     # single fixed group per account) - this is the join table that makes
     # that possible.
     memberships: Mapped[list["WorkspaceMembership"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    email_verification_token: Mapped["EmailVerificationToken | None"] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+    password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -86,6 +96,7 @@ class Workspace(Base):
     )
     entries: Mapped[list["JournalEntry"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     tags: Mapped[list["Tag"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    invites: Mapped[list["WorkspaceInvite"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
 
 
 class WorkspaceMembership(Base):
@@ -118,6 +129,37 @@ class WorkspaceMembership(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="memberships")
     user: Mapped["User"] = relationship(back_populates="memberships")
+
+
+class WorkspaceInvite(Base):
+    """A pending invitation to join a workspace, by email address rather
+    than an existing username - the replacement for the old owner-adds-
+    an-existing-user-by-username mechanism. Joining a workspace is now
+    always consent-based: the invitee has to act (log in and accept, or
+    register) before a WorkspaceMembership row is created; an owner can
+    never unilaterally add someone.
+
+    `token` is the unguessable, unique value emailed to the invitee - it's
+    what /api/invites/{token} and /api/invites/{token}/accept look up by,
+    and it's also what a new registration's `invite_token` field matches
+    against when the invitee has no account yet."""
+
+    __tablename__ = "workspace_invites"
+    __table_args__ = (CheckConstraint("role IN ('member', 'subscriber')", name="ck_workspace_invites_role"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String, nullable=False, default="member")
+    token: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    invited_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="invites")
+    inviter: Mapped["User"] = relationship(foreign_keys=[invited_by])
 
 
 class Tag(Base):
@@ -253,6 +295,43 @@ class SpotifyToken(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user: Mapped["User"] = relationship(back_populates="spotify_token")
+
+
+class EmailVerificationToken(Base):
+    """At most one live row per user - resending replaces the existing
+    row's token/expiry rather than accumulating old ones. Deleted outright
+    on successful verification, which both marks the flow complete and
+    means a reused link naturally 404s afterward."""
+
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, nullable=False, index=True)
+    token: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="email_verification_token")
+
+
+class PasswordResetToken(Base):
+    """Unlike email verification, a user can have several of these rows at
+    once (each password-reset request makes a new one) - but requesting a
+    new reset marks every previous still-live token for that user as used,
+    so only the most recently requested link is ever actually usable, the
+    same "your old link stopped working because you asked for a new one"
+    behavior most password-reset flows have."""
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    token: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="password_reset_tokens")
 
 
 # --- Full-text search -------------------------------------------------------
