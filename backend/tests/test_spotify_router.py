@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from app.schemas import PlaylistResult
+from app.spotify_retry import SpotifyUnavailableError
 
 
 def test_search_requires_query_param(client):
@@ -44,3 +45,14 @@ def test_search_does_not_require_auth(client):
         res = client.get("/api/spotify/playlists?q=chill")
 
     assert res.status_code == 200
+
+
+def test_search_rate_limit_exhausted_returns_clean_503_not_a_raw_error(client):
+    with patch(
+        "app.routers.spotify.search_playlists",
+        side_effect=SpotifyUnavailableError("Spotify is temporarily unavailable, try again shortly."),
+    ):
+        res = client.get("/api/spotify/playlists?q=chill")
+
+    assert res.status_code == 503
+    assert res.json() == {"detail": "Spotify is temporarily unavailable, try again shortly."}
