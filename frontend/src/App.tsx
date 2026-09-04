@@ -25,11 +25,13 @@ function useSpotifyCallbackNotice(): string | null {
     const spotifyResult = params.get('spotify')
     if (!spotifyResult) return
 
-    setNotice(
-      spotifyResult === 'connected'
-        ? 'Spotify account connected.'
-        : 'Spotify connection was not completed.',
-    )
+    if (spotifyResult === 'connected') {
+      setNotice('Spotify account connected.')
+    } else if (spotifyResult === 'unavailable') {
+      setNotice('Spotify is temporarily unavailable, try again shortly.')
+    } else {
+      setNotice('Spotify connection was not completed.')
+    }
     params.delete('spotify')
     const rest = params.toString()
     window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''))
