@@ -18,6 +18,7 @@ from ..spotify_oauth import (
     get_user_playlists,
     token_info_to_fields,
 )
+from ..spotify_retry import SpotifyUnavailableError
 
 router = APIRouter(prefix="/api/spotify", tags=["spotify"])
 
@@ -26,6 +27,8 @@ router = APIRouter(prefix="/api/spotify", tags=["spotify"])
 def search(q: str = Query(..., min_length=1)):
     try:
         return search_playlists(q)
+    except SpotifyUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -91,6 +94,12 @@ def callback(
         token_info = exchange_code_for_tokens(code)
     except SpotifyOAuthNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SpotifyUnavailableError:
+        # This leg of the flow is a bare browser redirect from Spotify, not
+        # an API caller expecting JSON - send it back the same way a denied
+        # authorization already is, with a distinct flag the frontend can
+        # show a clean message for.
+        return RedirectResponse(f"{frontend_url}/?spotify=unavailable")
 
     fields = token_info_to_fields(token_info)
     existing = db.scalar(select(SpotifyToken).where(SpotifyToken.user_id == user_id))
@@ -118,4 +127,6 @@ def my_playlists(
         db.commit()
         return get_user_playlists(access_token)
     except SpotifyOAuthNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SpotifyUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

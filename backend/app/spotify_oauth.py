@@ -25,6 +25,7 @@ from spotipy.cache_handler import MemoryCacheHandler
 
 from .models import SpotifyToken
 from .schemas import PlaylistResult
+from .spotify_retry import SpotifyUnavailableError, StatusCapturingSession, call_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class SpotifyOAuthNotConfigured(RuntimeError):
     pass
 
 
-def _oauth_manager() -> SpotifyOAuth:
+def _oauth_manager() -> tuple[SpotifyOAuth, StatusCapturingSession]:
     client_id = os.environ.get("SPOTIFY_CLIENT_ID")
     client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET")
     redirect_uri = os.environ.get("SPOTIFY_REDIRECT_URI")
@@ -48,24 +49,39 @@ def _oauth_manager() -> SpotifyOAuth:
     # MemoryCacheHandler (not spotipy's default file cache) - token storage
     # is our own spotify_tokens table, one row per app user, not a single
     # file on disk shared by whoever last authorized.
-    return SpotifyOAuth(
+    #
+    # StatusCapturingSession: spotipy's OAuth error path (SpotifyOauthError)
+    # discards the response status/headers, so call_with_retry reads them
+    # back off this session instead to detect a 429 - see spotify_retry.py.
+    session = StatusCapturingSession()
+    manager = SpotifyOAuth(
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=redirect_uri,
         scope=SCOPE,
         cache_handler=MemoryCacheHandler(),
+        requests_session=session,
     )
+    return manager, session
 
 
 def build_authorize_url(state: str) -> str:
-    return _oauth_manager().get_authorize_url(state=state)
+    manager, _ = _oauth_manager()
+    return manager.get_authorize_url(state=state)
 
 
 def exchange_code_for_tokens(code: str) -> dict:
     """Returns spotipy's token-info dict: access_token, refresh_token,
     expires_in/expires_at, scope, token_type."""
+    manager, session = _oauth_manager()
     try:
-        token_info = _oauth_manager().get_access_token(code, as_dict=True, check_cache=False)
+        token_info = call_with_retry(
+            manager.get_access_token, code, as_dict=True, check_cache=False,
+            log_label="oauth_exchange", session=session,
+        )
+    except SpotifyUnavailableError:
+        logger.warning("spotify.oauth_exchange unavailable_after_retries")
+        raise
     except Exception:
         logger.exception("spotify.oauth_exchange failed")
         raise
@@ -100,8 +116,15 @@ def ensure_fresh_access_token(token: SpotifyToken) -> str:
         return token.access_token
 
     logger.info("spotify.token_refresh user_id=%s needed=true", token.user_id)
+    manager, session = _oauth_manager()
     try:
-        refreshed = _oauth_manager().refresh_access_token(token.refresh_token)
+        refreshed = call_with_retry(
+            manager.refresh_access_token, token.refresh_token,
+            log_label="token_refresh", session=session,
+        )
+    except SpotifyUnavailableError:
+        logger.warning("spotify.token_refresh user_id=%s unavailable_after_retries", token.user_id)
+        raise
     except Exception:
         logger.exception("spotify.token_refresh user_id=%s failed", token.user_id)
         raise
@@ -120,9 +143,15 @@ def get_user_playlists(access_token: str) -> list[PlaylistResult]:
     """A separate spotipy.Spotify instance from the app-only client in
     spotify_client.py, authorized with this specific user's access token
     rather than app-only client credentials."""
-    sp = spotipy.Spotify(auth=access_token)
+    # Excludes 429 from spotipy/urllib3's own retry-on-status-code list -
+    # call_with_retry below owns 429 retry/backoff itself instead, the same
+    # reasoning as spotify_client.get_spotify_client().
+    sp = spotipy.Spotify(auth=access_token, status_forcelist=(500, 502, 503, 504))
     try:
-        results = sp.current_user_playlists(limit=50)
+        results = call_with_retry(sp.current_user_playlists, limit=50, log_label="my_playlists")
+    except SpotifyUnavailableError:
+        logger.warning("spotify.my_playlists unavailable_after_retries")
+        raise
     except Exception:
         logger.exception("spotify.my_playlists failed")
         raise
