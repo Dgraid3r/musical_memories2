@@ -3,6 +3,7 @@ import { addImages, updateEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import type { JournalEntry } from '../types'
 import CommentThread from './CommentThread'
+import EntryPhoto from './EntryPhoto'
 import TagInput from './TagInput'
 
 interface Props {
@@ -142,7 +143,7 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
       {entry.images.length > 0 && (
         <div className="entry-images">
           {entry.images.map((image) => (
-            <img key={image.id} src={`/uploads/${image.filename}`} alt="" />
+            <EntryPhoto key={image.id} entryId={entry.id} imageId={image.id} />
           ))}
         </div>
       )}

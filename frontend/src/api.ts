@@ -266,6 +266,19 @@ export async function fetchEntries(
   return res.json()
 }
 
+/** The only way to fetch an entry photo's bytes - permission-checked on
+ * the backend exactly like the entry itself (see
+ * GET /api/entries/{entry_id}/images/{image_id}), unlike the old raw
+ * /uploads/... static URL. A plain <img src> can't carry the
+ * Authorization header a private entry's photo requires, so callers
+ * fetch the blob themselves and hand the resulting object URL to <img>
+ * instead - see EntryPhoto.tsx. */
+export async function fetchEntryImageBlob(entryId: number, imageId: number, token: string | null): Promise<Blob> {
+  const res = await fetch(`/api/entries/${entryId}/images/${imageId}`, { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load photo'))
+  return res.blob()
+}
+
 export async function fetchTags(workspaceId: number, token: string | null): Promise<string[]> {
   const res = await fetch(`/api/workspaces/${workspaceId}/entries/tags`, { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load tags'))
