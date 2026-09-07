@@ -13,6 +13,14 @@ This flow lets a user grant this app access to *their own* Spotify data
 Tokens are persisted per-user in the spotify_tokens table (see models.py)
 and are never returned in any API response - only a connected/not-connected
 boolean ever leaves the server.
+
+Concurrency note: unlike spotify_client.py's shared search client, nothing
+here is module-level or shared across calls - _oauth_manager() builds a
+fresh SpotifyOAuth + StatusCapturingSession per call, and get_user_playlists
+builds a fresh spotipy.Spotify per call, so there's no mutable global state
+that concurrent requests from different users could race on. No throttle
+or lock is needed on this path for that reason (each user's own calls are
+already naturally independent of every other user's).
 """
 
 import logging

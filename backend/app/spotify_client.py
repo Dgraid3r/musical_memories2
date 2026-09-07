@@ -40,7 +40,18 @@ def clear_search_cache() -> None:
 # budget. A simple minimum-interval throttle - stdlib only, no new
 # dependency - smooths that out before it ever becomes a 429, rather than
 # only reacting to one after the fact via call_with_retry.
-SEARCH_MIN_INTERVAL_SECONDS = 0.1  # generous headroom (10 req/s ceiling), just enough to prevent bursts
+#
+# 0.1s (10 req/s ceiling) is generous headroom for personal/light use,
+# where real traffic is nowhere near that - but Spotify's commonly-observed
+# unofficial limit is closer to ~6 req/s sustained (roughly 180 requests
+# per rolling 30-second window), so sustained heavy concurrent load from
+# many users could still be tight enough to trip real 429s at this
+# default (the retry logic in spotify_retry.py handles that gracefully,
+# just less efficiently than avoiding it in the first place). Configurable
+# via env so it can be tightened as real usage grows, with no code change -
+# see the README's "Spotify API" section for how an operator would notice
+# it's time to do that.
+SEARCH_MIN_INTERVAL_SECONDS = float(os.environ.get("SPOTIFY_SEARCH_MIN_INTERVAL_SECONDS", "0.1"))
 
 _throttle_lock = threading.Lock()
 _last_call_monotonic: float | None = None
@@ -54,7 +65,15 @@ def reset_throttle() -> None:
         _last_call_monotonic = None
 
 
-def _throttle() -> None:
+def _throttle() -> float:
+    """Blocks until this call is allowed to proceed, then returns the
+    monotonic timestamp it was released at (the same value just recorded
+    as _last_call_monotonic). search_playlists ignores the return value,
+    but returning it (rather than None) costs nothing and lets a
+    concurrency test verify calls were spaced correctly using each call's
+    own guaranteed release time, rather than a timestamp taken later -
+    after the mocked network call and result processing - which would be
+    subject to its own independent thread-scheduling jitter."""
     global _last_call_monotonic
     with _throttle_lock:
         now = time.monotonic()
@@ -63,7 +82,9 @@ def _throttle() -> None:
             wait = _last_call_monotonic + SEARCH_MIN_INTERVAL_SECONDS - now
         if wait > 0:
             time.sleep(wait)
-        _last_call_monotonic = time.monotonic()
+        released_at = time.monotonic()
+        _last_call_monotonic = released_at
+    return released_at
 
 
 @lru_cache
