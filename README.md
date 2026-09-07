@@ -75,6 +75,15 @@ entry/tag/comment in it). Joining a workspace is a real, consent-based,
 email invite flow rather than an owner unilaterally adding an existing
 username - see "Invites, email verification, and password reset" below.
 
+An owner can hand ownership to another existing member with `PATCH
+/api/workspaces/{id}/transfer-ownership` (body `{"new_owner_user_id":
+...}`) - the target must already be a member (not a pending invite), and
+the change is immediate with no accept step, since this is meant for
+already-trusted collaborators rather than the invite flow's consent
+model. Atomic: the old owner becomes a plain member and the target
+becomes owner in the same transaction, so a workspace always has exactly
+one owner.
+
 Every entry/tag/comment/search endpoint is nested under the workspace:
 `GET/POST /api/workspaces/{id}/entries`, `GET/PATCH/DELETE
 /api/workspaces/{id}/entries/{entry_id}`, `GET/POST
@@ -116,6 +125,39 @@ client-credentials flow (app-only auth — no user login), which is enough to
 search Spotify's public catalog of playlists. Register an app at
 https://developer.spotify.com/dashboard, then copy `backend/.env.example`
 to `backend/.env` and fill in `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`.
+
+**Rate-limit handling** — every outbound Spotify call (search, per-user
+playlist calls, OAuth token exchange/refresh) retries a `429` with capped
+backoff (honoring `Retry-After` when Spotify sends one, but always bounded
+to a few seconds and a small number of attempts, so a request never hangs
+waiting on Spotify). Once retries are exhausted, the API returns a clean
+`503` ("Spotify is temporarily unavailable, try again shortly") instead of
+a raw error. The shared app-only search client (used by every user's
+searches) also throttles its own outbound call rate slightly, to make
+tripping Spotify's limit in the first place less likely.
+
+The throttle assumes personal/light traffic: its default,
+`SPOTIFY_SEARCH_MIN_INTERVAL_SECONDS=0.1` (a 10 req/s ceiling on the shared
+search client, configurable in `backend/.env`), is generous headroom for
+occasional, sparse use, where real traffic is nowhere near that ceiling.
+Spotify doesn't publish an exact limit, but the commonly-observed
+unofficial one is closer to ~6 req/s sustained (roughly 180 requests per
+rolling 30-second window) - so as usage scales up to many concurrent
+users, this default could still be tight enough to trip real `429`s under
+sustained heavy load (the retry logic above keeps things working either
+way, just less efficiently than avoiding the 429 in the first place). The
+concurrency behavior of the throttle itself (a `threading.Lock` serializing
+every call under FastAPI's threadpool) is covered by
+`backend/tests/test_spotify_throttle.py`'s burst test, so it's confirmed
+safe as concurrent load grows - what changes with scale is only whether
+the *interval* is tight enough, not whether it's thread-safe. The signal
+to tighten it: frequent `spotify.rate_limit_exhausted` lines in the logs
+(or Sentry, if configured) mean the current interval is no longer enough
+headroom for real traffic - lower `SPOTIFY_SEARCH_MIN_INTERVAL_SECONDS`
+(e.g. to `0.2` for a ~5 req/s ceiling) and redeploy, no code change
+needed. If that stops being enough on its own, that's the point to
+revisit this more substantially (e.g. a shared cross-process limiter),
+but nothing like that exists yet.
 
 ### Connecting your own Spotify account (optional)
 
@@ -254,6 +296,7 @@ Account: `POST /api/account/verify-email/resend`, `POST
 
 Workspaces: `POST/GET /api/workspaces`, `GET /api/workspaces/{id}/members`,
 `DELETE /api/workspaces/{id}/members/{user_id}`, `DELETE /api/workspaces/{id}`,
+`PATCH /api/workspaces/{id}/transfer-ownership`,
 `POST/GET /api/workspaces/{id}/invites`, `DELETE
 /api/workspaces/{id}/invites/{invite_id}`.
 

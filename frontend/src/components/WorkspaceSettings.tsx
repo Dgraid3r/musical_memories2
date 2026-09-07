@@ -6,6 +6,7 @@ import {
   fetchWorkspaceMembers,
   removeWorkspaceMember,
   revokeWorkspaceInvite,
+  transferWorkspaceOwnership,
   updateWorkspaceMemberRole,
   updateWorkspaceVisibility,
 } from '../api'
@@ -28,6 +29,7 @@ export default function WorkspaceSettings({ onClose }: Props) {
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<Extract<WorkspaceRole, 'member' | 'subscriber'>>('member')
   const [sendingInvite, setSendingInvite] = useState(false)
+  const [transferringTo, setTransferringTo] = useState<number | null>(null)
 
   const isOwner = activeWorkspace?.role === 'owner'
 
@@ -105,6 +107,29 @@ export default function WorkspaceSettings({ onClose }: Props) {
     }
   }
 
+  async function handleTransferOwnership(userId: number, username: string) {
+    if (!token || !activeWorkspace || !user) return
+    setError(null)
+    setTransferringTo(userId)
+    try {
+      await transferWorkspaceOwnership(activeWorkspace.id, userId, token)
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.user_id === userId) return { ...m, role: 'owner' }
+          if (m.user_id === user.id) return { ...m, role: 'member' }
+          return m
+        }),
+      )
+      // The caller's own role in this workspace just changed - refresh the
+      // switcher/context so isOwner-gated UI everywhere updates too.
+      await refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : `Could not make ${username} the owner.`)
+    } finally {
+      setTransferringTo(null)
+    }
+  }
+
   async function handleRemove(userId: number) {
     if (!token || !activeWorkspace) return
     setError(null)
@@ -158,6 +183,14 @@ export default function WorkspaceSettings({ onClose }: Props) {
                     <option value="member">Member (read/write)</option>
                     <option value="subscriber">Subscriber (read-only)</option>
                   </select>
+                  <button
+                    type="button"
+                    className="link-btn"
+                    onClick={() => handleTransferOwnership(m.user_id, m.username)}
+                    disabled={transferringTo !== null}
+                  >
+                    {transferringTo === m.user_id ? 'Making owner...' : 'Make owner'}
+                  </button>
                   <button type="button" className="link-btn" onClick={() => handleRemove(m.user_id)}>
                     Remove
                   </button>

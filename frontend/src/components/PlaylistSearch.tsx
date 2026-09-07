@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchMyPlaylists, fetchSpotifyStatus, searchPlaylists } from '../api'
+import { ApiError, fetchMyPlaylists, fetchSpotifyStatus, searchPlaylists } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import type { PlaylistResult } from '../types'
 
@@ -36,7 +36,11 @@ export default function PlaylistSearch({ selected, onSelect }: Props) {
       setError(null)
       searchPlaylists(query)
         .then(setResults)
-        .catch(() => setError('Could not search Spotify. Check your API credentials.'))
+        .catch((err) =>
+          setError(
+            err instanceof ApiError ? err.message : 'Could not search Spotify. Check your API credentials.',
+          ),
+        )
         .finally(() => setLoading(false))
     }, 350)
     return () => clearTimeout(handle)
@@ -49,7 +53,9 @@ export default function PlaylistSearch({ selected, onSelect }: Props) {
       setLoadingMyPlaylists(true)
       fetchMyPlaylists(token)
         .then(setMyPlaylists)
-        .catch(() => setError('Could not load your Spotify playlists.'))
+        .catch((err) =>
+          setError(err instanceof ApiError ? err.message : 'Could not load your Spotify playlists.'),
+        )
         .finally(() => setLoadingMyPlaylists(false))
     }
   }

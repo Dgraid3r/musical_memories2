@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+from spotipy.oauth2 import SpotifyOauthError
 
 from app import auth
 from app.schemas import PlaylistResult
@@ -138,6 +140,24 @@ def test_callback_upserts_existing_token(client, make_user, db_session):
     assert tokens[0].access_token == "access-2"
 
 
+def test_callback_rate_limit_exhausted_redirects_with_unavailable_flag(client, make_user, db_session):
+    from app.models import SpotifyToken
+    from app.spotify_retry import SpotifyUnavailableError
+
+    alice = make_user("alice")
+    state = auth.create_oauth_state(alice["id"])
+
+    with patch(
+        "app.routers.spotify.exchange_code_for_tokens",
+        side_effect=SpotifyUnavailableError("Spotify is temporarily unavailable, try again shortly."),
+    ):
+        res = client.get(f"/api/spotify/callback?code=abc123&state={state}", follow_redirects=False)
+
+    assert res.status_code in (302, 307)
+    assert "spotify=unavailable" in res.headers["location"]
+    assert db_session.query(SpotifyToken).filter_by(user_id=alice["id"]).first() is None
+
+
 def test_callback_denied_redirects_without_storing_token(client, make_user, db_session):
     from app.models import SpotifyToken
 
@@ -267,7 +287,9 @@ def test_my_playlists_refreshes_expired_token(client, make_user, db_session):
         patch("app.spotify_oauth._oauth_manager") as mock_manager_factory,
         patch("app.routers.spotify.get_user_playlists", return_value=[]) as mock_get,
     ):
-        mock_manager_factory.return_value.refresh_access_token.return_value = refreshed_info
+        mock_manager, mock_session = MagicMock(), MagicMock()
+        mock_manager.refresh_access_token.return_value = refreshed_info
+        mock_manager_factory.return_value = (mock_manager, mock_session)
         res = client.get("/api/spotify/me/playlists", headers=alice["headers"])
 
     assert res.status_code == 200
@@ -296,10 +318,12 @@ def test_my_playlists_does_not_refresh_unexpired_token(client, make_user, db_ses
         patch("app.spotify_oauth._oauth_manager") as mock_manager_factory,
         patch("app.routers.spotify.get_user_playlists", return_value=[]) as mock_get,
     ):
+        mock_manager, mock_session = MagicMock(), MagicMock()
+        mock_manager_factory.return_value = (mock_manager, mock_session)
         res = client.get("/api/spotify/me/playlists", headers=alice["headers"])
 
     assert res.status_code == 200
-    mock_manager_factory.return_value.refresh_access_token.assert_not_called()
+    mock_manager.refresh_access_token.assert_not_called()
     mock_get.assert_called_once_with("still-good-access")
 
 
@@ -321,3 +345,101 @@ def test_my_playlists_never_leaks_tokens_in_response(client, make_user, db_sessi
         res = client.get("/api/spotify/me/playlists", headers=alice["headers"])
 
     assert "super-secret" not in res.text
+
+
+# --- 429 handling: per-user OAuth calls and token refresh -------------------
+
+
+def test_my_playlists_retries_after_a_429_and_succeeds(client, make_user, db_session):
+    from spotipy.exceptions import SpotifyException
+
+    from app.models import SpotifyToken
+
+    alice = make_user("alice")
+    db_session.add(
+        SpotifyToken(
+            user_id=alice["id"],
+            access_token="valid-access",
+            refresh_token="r",
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+    )
+    db_session.commit()
+
+    fake_sp = MagicMock()
+    fake_sp.current_user_playlists.side_effect = [
+        SpotifyException(429, -1, "rate limited", headers={"Retry-After": "1"}),
+        {"items": []},
+    ]
+
+    with (
+        patch("app.spotify_oauth.spotipy.Spotify", return_value=fake_sp),
+        patch("app.spotify_retry.time.sleep"),
+    ):
+        res = client.get("/api/spotify/me/playlists", headers=alice["headers"])
+
+    assert res.status_code == 200
+    assert fake_sp.current_user_playlists.call_count == 2
+
+
+def test_my_playlists_rate_limit_exhausted_returns_clean_503(client, make_user, db_session):
+    from spotipy.exceptions import SpotifyException
+
+    from app.models import SpotifyToken
+
+    alice = make_user("alice")
+    db_session.add(
+        SpotifyToken(
+            user_id=alice["id"],
+            access_token="valid-access",
+            refresh_token="r",
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+    )
+    db_session.commit()
+
+    fake_sp = MagicMock()
+    fake_sp.current_user_playlists.side_effect = SpotifyException(429, -1, "rate limited", headers={})
+
+    with (
+        patch("app.spotify_oauth.spotipy.Spotify", return_value=fake_sp),
+        patch("app.spotify_retry.time.sleep"),
+    ):
+        res = client.get("/api/spotify/me/playlists", headers=alice["headers"])
+
+    assert res.status_code == 503
+    assert res.json() == {"detail": "Spotify is temporarily unavailable, try again shortly."}
+
+
+def test_token_refresh_retries_after_a_429_and_succeeds(client, make_user, db_session):
+    from app.models import SpotifyToken
+
+    alice = make_user("alice")
+    db_session.add(
+        SpotifyToken(
+            user_id=alice["id"],
+            access_token="stale-access",
+            refresh_token="my-refresh-token",
+            expires_at=datetime.utcnow() - timedelta(minutes=5),
+        )
+    )
+    db_session.commit()
+
+    with (
+        patch("app.spotify_oauth._oauth_manager") as mock_manager_factory,
+        patch("app.routers.spotify.get_user_playlists", return_value=[]) as mock_get,
+        patch("app.spotify_retry.time.sleep"),
+    ):
+        mock_manager, mock_session = MagicMock(), MagicMock()
+        mock_session.last_status = 429
+        mock_session.last_headers = {"Retry-After": "1"}
+        mock_manager.refresh_access_token.side_effect = [
+            SpotifyOauthError("rate limited"),
+            {"access_token": "fresh-access", "expires_in": 3600, "scope": "playlist-read-private"},
+        ]
+        mock_manager_factory.return_value = (mock_manager, mock_session)
+        res = client.get("/api/spotify/me/playlists", headers=alice["headers"])
+
+    assert res.status_code == 200
+    mock_get.assert_called_once_with("fresh-access")
+    assert mock_manager.refresh_access_token.call_count == 2

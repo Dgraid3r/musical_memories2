@@ -25,7 +25,7 @@ from app.database import Base, SessionLocal, engine
 from app.email import clear_dev_outbox, last_email_to
 from app.main import app
 from app.rate_limit import limiter
-from app.spotify_client import clear_search_cache
+from app.spotify_client import clear_search_cache, reset_throttle
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +41,16 @@ def _clear_spotify_search_cache():
     # specific image/owner shape) would silently satisfy a later test's
     # identically-worded search instead of that test's own mock being called.
     clear_search_cache()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_spotify_throttle():
+    # Same reasoning as the search-cache fixture above - otherwise a
+    # search made near the end of one test could make an unrelated later
+    # test's first search wait on the shared-client throttle for no
+    # reason that test caused.
+    reset_throttle()
     yield
 
 

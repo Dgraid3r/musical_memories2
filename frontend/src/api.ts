@@ -227,6 +227,22 @@ export async function removeWorkspaceMember(workspaceId: number, userId: number,
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to remove member'))
 }
 
+/** Hands ownership to an existing member immediately - no accept step.
+ * Returns the caller's own (now "member") WorkspaceOut. */
+export async function transferWorkspaceOwnership(
+  workspaceId: number,
+  newOwnerUserId: number,
+  token: string,
+): Promise<Workspace> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/transfer-ownership`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ new_owner_user_id: newOwnerUserId }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to transfer ownership'))
+  return res.json()
+}
+
 // --- Entries (workspace-scoped) -----------------------------------------
 
 export interface EntrySearchParams {
