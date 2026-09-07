@@ -118,6 +118,47 @@ workspace, plus your own private ones, plus private ones you co-author):
 `GET /api/workspaces/{id}/entries/tags` lists every tag currently in use in
 that workspace, across entries visible to the caller, for autocomplete.
 
+## Entry photos
+
+Photos attach to an entry via `POST /api/workspaces/{id}/entries` (at
+creation) or `POST /api/workspaces/{id}/entries/{entry_id}/images` (added
+later). Fetching one back is `GET
+/api/entries/{entry_id}/images/{image_id}` - deliberately not a raw static
+file URL. This endpoint enforces the exact same visibility rule as the
+entry itself (public, your own, or co-authored) before ever serving or
+redirecting to the image; an entry you can't see gives the same 404 for
+its photos as for the entry. There is exactly one path to a photo's
+bytes, and it's permission-checked.
+
+**Storage backend** — pluggable, the same opt-in pattern as
+`SENTRY_DSN`/`SMTP_HOST`: leave `OBJECT_STORAGE_ENDPOINT_URL` unset in
+`backend/.env` and photos save to and serve from local disk
+(`backend/uploads/`), exactly as before - zero cost, zero signup. Set
+`OBJECT_STORAGE_ENDPOINT_URL`/`OBJECT_STORAGE_BUCKET`/
+`OBJECT_STORAGE_ACCESS_KEY`/`OBJECT_STORAGE_SECRET_KEY` (see
+`backend/.env.example`) to switch to any S3-compatible object storage
+instead - AWS S3, Cloudflare R2, Backblaze B2, or a local MinIO container
+for dev/testing all work unmodified, since this is built against the
+generic S3 API rather than an AWS-specific SDK path. Cloudflare R2 is a
+reasonable low-cost pick for personal-scale use (no egress fees), but
+nothing here is R2-specific.
+
+With object storage configured, a fetch redirects to a short-lived
+(5-minute) presigned URL generated only after the visibility check above
+passes - the bucket itself never needs to be public, and a leaked or
+cached link stops working shortly after.
+
+**Migrating existing local photos:** configuring object storage doesn't
+touch photos already on local disk - nothing changes for them until you
+run `python -m scripts.migrate_uploads_to_object_storage` from `backend/`
+(add `--dry-run` to preview first). It uploads each local file under its
+existing filename, so no database changes are needed - the app just
+starts serving them from object storage the next time they're requested,
+because it already prefers object storage over local disk whenever it's
+configured. Not run automatically, and never required; local copies are
+left in place afterward so you can double-check before removing them
+yourself.
+
 ## Spotify API
 
 Playlist search (the picker on the entry form) uses Spotipy's
@@ -254,6 +295,13 @@ Creating an account is open to anyone (it's already rate-limited - see
   ```
   (this is a different key format than `JWT_SECRET_KEY` - don't reuse the
   `secrets.token_hex` command for it).
+- **Entry photos are permission-checked, not a public static file** —
+  `GET /api/entries/{entry_id}/images/{image_id}` is the only way to fetch
+  a photo, and it enforces the exact same visibility rule as the entry
+  itself before serving or redirecting to it. There is no raw
+  `/uploads/...` static route (there used to be - it served any file to
+  anyone who had or guessed its filename, regardless of the owning
+  entry's or workspace's privacy). See "Entry photos" above.
 - **Rate limiting** — `POST /api/sessions`, `POST /api/users`, `POST
   /api/invites/{token}/accept`, `POST /api/account/verify-email/resend`,
   `POST /api/account/password-reset/request`, and `POST
@@ -311,7 +359,10 @@ existing entry), `GET /api/workspaces/{id}/entries/tags` (tags in use),
 `GET/POST /api/workspaces/{id}/entries/{entry_id}/comments`.
 
 Not workspace-nested (the id alone is enough to resolve which workspace
-applies, via the comment's own entry): `PATCH/DELETE /api/comments/{id}`.
+applies, via the owning entry): `PATCH/DELETE /api/comments/{id}`,
+`GET /api/entries/{entry_id}/images/{image_id}` (see "Entry photos" above
+- the only way to fetch a photo's bytes, permission-checked the same as
+the entry itself).
 
 Spotify: `GET /api/spotify/playlists?q=` (public catalog search) and the
 account-linking endpoints described above.
@@ -343,7 +394,7 @@ npm run dev
 ```
 
 Then open the Vite dev server URL (default `http://localhost:5173`). The
-frontend proxies `/api` and `/uploads` to the backend on port 8000.
+frontend proxies `/api` to the backend on port 8000.
 
 ## Tests
 
