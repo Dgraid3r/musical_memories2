@@ -136,6 +136,29 @@ a raw error. The shared app-only search client (used by every user's
 searches) also throttles its own outbound call rate slightly, to make
 tripping Spotify's limit in the first place less likely.
 
+The throttle assumes personal/light traffic: its default,
+`SPOTIFY_SEARCH_MIN_INTERVAL_SECONDS=0.1` (a 10 req/s ceiling on the shared
+search client, configurable in `backend/.env`), is generous headroom for
+occasional, sparse use, where real traffic is nowhere near that ceiling.
+Spotify doesn't publish an exact limit, but the commonly-observed
+unofficial one is closer to ~6 req/s sustained (roughly 180 requests per
+rolling 30-second window) - so as usage scales up to many concurrent
+users, this default could still be tight enough to trip real `429`s under
+sustained heavy load (the retry logic above keeps things working either
+way, just less efficiently than avoiding the 429 in the first place). The
+concurrency behavior of the throttle itself (a `threading.Lock` serializing
+every call under FastAPI's threadpool) is covered by
+`backend/tests/test_spotify_throttle.py`'s burst test, so it's confirmed
+safe as concurrent load grows - what changes with scale is only whether
+the *interval* is tight enough, not whether it's thread-safe. The signal
+to tighten it: frequent `spotify.rate_limit_exhausted` lines in the logs
+(or Sentry, if configured) mean the current interval is no longer enough
+headroom for real traffic - lower `SPOTIFY_SEARCH_MIN_INTERVAL_SECONDS`
+(e.g. to `0.2` for a ~5 req/s ceiling) and redeploy, no code change
+needed. If that stops being enough on its own, that's the point to
+revisit this more substantially (e.g. a shared cross-process limiter),
+but nothing like that exists yet.
+
 ### Connecting your own Spotify account (optional)
 
 Separately, a logged-in user can link their own Spotify account (Authorization
