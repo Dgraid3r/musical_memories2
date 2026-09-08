@@ -16,5 +16,41 @@ services:
       timeout: 5s
       retries: 10
 
+  # Daily database backups (see backend/scripts/backup_database.py and
+  # the README's "Backups" section). Opt-in via a profile rather than
+  # part of the default `docker compose up -d` set, so an ordinary local
+  # dev/test session doesn't pay for building this image every time -
+  # start it explicitly with `docker compose --profile backup up -d`.
+  # Scheduling here is deliberately a simple sleep loop, not real cron;
+  # see run_backup_daily.sh and the README for how to adapt this once
+  # real hosting is chosen.
+  backup:
+    profiles: ["backup"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backup
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      # Overrides backend/.env's dev-machine `localhost` value - this
+      # container reaches Postgres over the compose network instead.
+      # Everything else (OBJECT_STORAGE_*, BACKUP_RETENTION_DAYS,
+      # BACKUP_INTERVAL_SECONDS, SENTRY_DSN, LOG_LEVEL) comes from
+      # backend/.env unchanged, when it exists.
+      DATABASE_URL: postgresql+psycopg://musical_memories:musical_memories@postgres:5432/musical_memories
+    volumes:
+      # Bind-mounted (not a named volume) so a local-fallback backup
+      # (no OBJECT_STORAGE_* configured) lands in the same place
+      # backend/scripts/backup_database.py would put it if run directly
+      # on the host, and survives this container being recreated -
+      # still just a smoke test of the mechanism, per the script's own
+      # docstring, not real off-machine protection.
+      - ./backend/backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:

@@ -1,0 +1,25 @@
+# Purpose-built, minimal image for the daily-backup sidecar service
+# defined in docker-compose.yml - NOT the application server (there's no
+# Dockerfile for that yet; the backend still runs directly via uvicorn,
+# see the README's "Running locally"). Based on postgres:16-alpine
+# specifically so pg_dump/psql are the exact matching version already
+# used by the postgres service itself, with Python layered on top to
+# run backup_database.py (which reuses app/storage.py for the
+# object-storage upload path, so it needs the same dependencies the
+# backend itself does).
+
+FROM postgres:16-alpine
+
+RUN apk add --no-cache python3 py3-pip
+
+WORKDIR /app
+COPY requirements-backup.txt .
+RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r requirements-backup.txt
+ENV PATH="/venv/bin:$PATH"
+
+COPY app/storage.py ./app/storage.py
+COPY app/__init__.py ./app/__init__.py
+COPY scripts ./scripts
+
+RUN chmod +x scripts/run_backup_daily.sh
+ENTRYPOINT ["scripts/run_backup_daily.sh"]
