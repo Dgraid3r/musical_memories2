@@ -1,6 +1,5 @@
 export interface EntryImage {
   id: number
-  filename: string
 }
 
 export interface UserPublic {
