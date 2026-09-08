@@ -13,3 +13,4 @@ alembic==1.14.0
 cryptography==50.0.1
 sentry-sdk==2.68.1
 slowapi==0.1.10
+boto3==1.43.89

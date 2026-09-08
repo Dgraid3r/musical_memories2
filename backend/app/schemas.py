@@ -5,10 +5,15 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class EntryImageOut(BaseModel):
+    """No filename - the frontend fetches an image's bytes through
+    GET /api/entries/{entry_id}/images/{image_id} using id alone, and the
+    stored filename is an internal storage-layer detail (see
+    EntryImage.filename / app/storage.py) with no reason to leave the
+    server."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    filename: str
 
 
 class UserPublic(BaseModel):

@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
@@ -43,7 +42,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/uploads", StaticFiles(directory=Path(__file__).resolve().parent.parent / "uploads"), name="uploads")
+# No raw static mount for uploads - every image fetch goes through
+# entries.image_router (GET /api/entries/{entry_id}/images/{image_id}),
+# which enforces the same visibility check as the entry itself before
+# serving or redirecting to the image. See app/storage.py.
 
 app.include_router(users.router)
 app.include_router(sessions.router)
@@ -51,6 +53,7 @@ app.include_router(account.router)
 app.include_router(workspaces.router)
 app.include_router(invites.router)
 app.include_router(entries.router)
+app.include_router(entries.image_router)
 app.include_router(comments.router)
 app.include_router(spotify.router)
 

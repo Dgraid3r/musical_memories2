@@ -1,5 +1,4 @@
 import logging
-import uuid
 from datetime import date
 from pathlib import Path
 
@@ -11,14 +10,21 @@ from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
 from ..models import EntryImage, JournalEntry, Tag, User, WorkspaceMembership
 from ..schemas import JournalEntryOut, JournalEntryUpdate
+from ..storage import get_storage
 from .workspaces import WRITE_ROLES, require_workspace_read_access, require_workspace_write_access
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/entries", tags=["entries"])
 
-UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
-UPLOADS_DIR.mkdir(exist_ok=True)
+# Not workspace-nested, like /api/comments/{id} - the entry_id in the path
+# is enough to resolve the owning workspace via the entry itself, and this
+# is the *only* path to an image's bytes now: every fetch goes through
+# _visible_or_404 first (see get_entry_image below), unlike the old raw
+# /uploads static mount, which served any file to anyone who had or
+# guessed its filename regardless of the owning entry's or workspace's
+# visibility.
+image_router = APIRouter(prefix="/api/entries", tags=["entries"])
 
 
 def _is_owner(entry: JournalEntry, user: User | None) -> bool:
@@ -173,14 +179,12 @@ def _resolve_tags(names: list[str], db: Session, workspace_id: int) -> list[Tag]
 
 
 def _save_images(images: list[UploadFile], entry_id: int, db: Session) -> None:
+    storage = get_storage()
     for image in images:
         if not image.filename:
             continue
         suffix = Path(image.filename).suffix
-        stored_name = f"{uuid.uuid4().hex}{suffix}"
-        dest = UPLOADS_DIR / stored_name
-        with dest.open("wb") as f:
-            f.write(image.file.read())
+        stored_name = storage.save(image.file.read(), suffix)
         db.add(EntryImage(entry_id=entry_id, filename=stored_name))
 
 
@@ -363,9 +367,35 @@ def delete_entry(
     entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     if not _is_owner(entry, current_user):
         raise HTTPException(status_code=403, detail="Only the primary author can delete this entry")
+    storage = get_storage()
     for image in entry.images:
-        image_path = UPLOADS_DIR / image.filename
-        image_path.unlink(missing_ok=True)
+        storage.delete(image.filename)
     db.delete(entry)
     db.commit()
     logger.info("entry.deleted workspace_id=%s entry_id=%s user_id=%s", workspace_id, entry_id, current_user.id)
+
+
+@image_router.get("/{entry_id}/images/{image_id}")
+def get_entry_image(
+    entry_id: int,
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """The only path to an image's bytes - reuses the exact same
+    visibility rule as GET .../entries/{entry_id} (_visible_or_404),
+    rather than a raw static file mount that would serve any image to
+    anyone who had or guessed its stored filename, regardless of whether
+    its entry or workspace is private. Readable with no auth token at all
+    when the entry is genuinely public, same as the entry itself.
+
+    Serves the bytes directly for local-disk storage, or redirects to a
+    short-lived presigned URL for object storage (see storage.py) - the
+    permission check above runs either way, before either kind of
+    response is ever produced."""
+    entry = db.get(JournalEntry, entry_id)
+    entry = _visible_or_404(entry, current_user, db)
+    image = next((img for img in entry.images if img.id == image_id), None)
+    if image is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return get_storage().serve_response(image.filename)

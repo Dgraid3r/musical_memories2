@@ -26,6 +26,7 @@ from app.email import clear_dev_outbox, last_email_to
 from app.main import app
 from app.rate_limit import limiter
 from app.spotify_client import clear_search_cache, reset_throttle
+from app.storage import get_storage
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +72,18 @@ def _clear_email_outbox():
     # sends its own email to the same address and checks last_email_to.
     clear_dev_outbox()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_storage_backend():
+    # get_storage() is lru_cache'd (constructing an S3 client per request
+    # would be wasteful) - a test that monkeypatches OBJECT_STORAGE_* env
+    # vars to exercise the S3-compatible backend must not leave that
+    # cached selection in place for every other test, which all assume
+    # the default local-disk backend.
+    get_storage.cache_clear()
+    yield
+    get_storage.cache_clear()
 
 
 @pytest.fixture

@@ -316,7 +316,9 @@ def test_owner_can_clear_coauthor_list(client, make_user, make_workspace):
     assert res.json()["coauthors"] == []
 
 
-def test_add_images_by_coauthor_succeeds(client, make_user, make_workspace):
+def test_add_images_by_coauthor_succeeds(client, make_user, make_workspace, db_session):
+    from app.models import EntryImage
+
     alice = make_user("alice")
     bob = make_user("bob")
     ws = make_workspace(alice, bob)
@@ -328,10 +330,14 @@ def test_add_images_by_coauthor_succeeds(client, make_user, make_workspace):
         files=[("images", ("photo.png", b"fake image bytes", "image/png"))],
     )
     assert res.status_code == 201
-    filenames = [img["filename"] for img in res.json()["images"]]
-    assert len(filenames) == 1
-    for name in filenames:
-        (UPLOADS_DIR / name).unlink(missing_ok=True)
+    assert len(res.json()["images"]) == 1
+
+    # The API response no longer exposes the stored filename (see
+    # EntryImageOut) - the DB row is the only place it's still visible,
+    # which is fine here since this is just cleaning up the file on disk.
+    stored = db_session.query(EntryImage).filter_by(entry_id=entry_id).all()
+    for image in stored:
+        (UPLOADS_DIR / image.filename).unlink(missing_ok=True)
 
 
 def test_add_images_to_nonexistent_entry_returns_404(client, make_user, make_workspace):
@@ -597,7 +603,9 @@ def test_delete_nonexistent_entry_returns_404(client, make_user, make_workspace)
     assert res.status_code == 404
 
 
-def test_create_entry_with_image_upload(client, make_user, make_workspace):
+def test_create_entry_with_image_upload(client, make_user, make_workspace, db_session):
+    from app.models import EntryImage
+
     alice = make_user("alice")
     ws = make_workspace(alice)
     res = client.post(
@@ -616,14 +624,22 @@ def test_create_entry_with_image_upload(client, make_user, make_workspace):
     assert res.status_code == 201
     body = res.json()
     assert len(body["images"]) == 1
-    saved_path = UPLOADS_DIR / body["images"][0]["filename"]
+    # The API response no longer exposes the stored filename (see
+    # EntryImageOut) - only its id, which is enough to fetch it back
+    # through GET /api/entries/{entry_id}/images/{image_id}. The actual
+    # filename on disk is an internal storage-layer detail, checked here
+    # straight from the DB row.
+    image = db_session.get(EntryImage, body["images"][0]["id"])
+    saved_path = UPLOADS_DIR / image.filename
     try:
         assert saved_path.exists()
     finally:
         saved_path.unlink(missing_ok=True)
 
 
-def test_delete_entry_removes_uploaded_images(client, make_user, make_workspace):
+def test_delete_entry_removes_uploaded_images(client, make_user, make_workspace, db_session):
+    from app.models import EntryImage
+
     alice = make_user("alice")
     ws = make_workspace(alice)
     create_res = client.post(
@@ -638,8 +654,8 @@ def test_delete_entry_removes_uploaded_images(client, make_user, make_workspace)
         },
         files=[("images", ("photo.png", b"fake image bytes", "image/png"))],
     )
-    filename = create_res.json()["images"][0]["filename"]
-    saved_path = UPLOADS_DIR / filename
+    image_id = create_res.json()["images"][0]["id"]
+    saved_path = UPLOADS_DIR / db_session.get(EntryImage, image_id).filename
     assert saved_path.exists()
 
     entry_id = create_res.json()["id"]
