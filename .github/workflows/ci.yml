@@ -32,8 +32,19 @@ jobs:
     # backend/tests/conftest.py overwrites DATABASE_URL in-process to point
     # at musical_memories_test (created in its own step below) before any
     # app code is imported, the same as it does for local test runs.
+    #
+    # PG_DUMP_COMMAND/PSQL_COMMAND: backend/tests/test_backup_restore_roundtrip.py
+    # calls the real pg_dump/psql binaries. Locally (no native install on
+    # the dev machine) it falls back to routing through docker compose exec
+    # into the postgres container, but there's no docker-compose service
+    # here - just the plain Postgres *service container* below, reachable
+    # directly on localhost:5432 - so these tell it to invoke the plain
+    # binaries on PATH instead (installed, if not already present, in the
+    # step below).
     env:
       DATABASE_URL: postgresql+psycopg://musical_memories:musical_memories@localhost:5432/musical_memories
+      PG_DUMP_COMMAND: pg_dump
+      PSQL_COMMAND: psql
 
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +56,21 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Ensure postgresql-client (pg_dump/psql) is available
+        # Verified at run time rather than assumed: ubuntu-latest runners
+        # typically already have this, but check first and only install
+        # if actually missing, and print the resolved versions either way
+        # so it's visible in the log what ran.
+        run: |
+          if ! command -v pg_dump >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1; then
+            echo "postgresql-client not found - installing..."
+            sudo apt-get update && sudo apt-get install -y postgresql-client
+          else
+            echo "postgresql-client already present."
+          fi
+          pg_dump --version
+          psql --version
 
       - name: Create test database
         # Mirrors docker/init-test-db.sh's local dev-container setup - a
