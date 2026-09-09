@@ -1,0 +1,14 @@
+# Keeps the production Dockerfile's build context to what it actually
+# needs - a stray local node_modules/, .venv/, or previous dist/ build on
+# the host must never leak into the image.
+**/.git
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+frontend/dist
+backend/uploads
+backend/backups
+backend/.env
+.env
+*.md
