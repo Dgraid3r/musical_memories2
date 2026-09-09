@@ -1,0 +1,7 @@
+# Minimal dependency set for the backup sidecar (see Dockerfile.backup),
+# not the full app's requirements.txt - backup_database.py only reaches
+# into app/storage.py, whose own imports are just fastapi (Response
+# types) and boto3 (the S3-compatible client). Pinned to match
+# requirements.txt exactly.
+fastapi==0.115.6
+boto3==1.43.89

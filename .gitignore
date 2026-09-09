@@ -7,5 +7,7 @@ __pycache__/
 backend/musical_memories.db
 backend/uploads/*
 !backend/uploads/.gitkeep
+backend/backups/*
+!backend/backups/.gitkeep
 frontend/dist/
 .pytest_cache/

@@ -1,0 +1,4 @@
+# Shell scripts run inside Linux containers - a CRLF-mangled shebang
+# line (introduced by Windows checkout under core.autocrlf) breaks them
+# with "no such file or directory". Force LF regardless of platform.
+*.sh text eol=lf

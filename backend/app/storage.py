@@ -51,6 +51,20 @@ class ObjectStorage(Protocol):
         or a redirect to a short-lived presigned URL (object storage)."""
         ...
 
+    def list_keys(self, prefix: str) -> list[str]:
+        """Every stored key starting with `prefix` - used by
+        scripts/backup_database.py to find backups (stored under a
+        backups/ prefix) for retention cleanup."""
+        ...
+
+    def get_bytes(self, stored_name: str) -> bytes:
+        """Reads a stored object's raw bytes back out - used by
+        scripts/restore_database.py to fetch a backup for restoring.
+        Distinct from serve_response(), which is for the permission-
+        checked photo-fetch endpoint's browser-facing Response, not a
+        script that wants the actual bytes."""
+        ...
+
 
 class LocalDiskStorage:
     """Today's behavior: files live in backend/uploads/, named with a
@@ -72,6 +86,12 @@ class LocalDiskStorage:
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
         return FileResponse(path)
+
+    def list_keys(self, prefix: str) -> list[str]:
+        return [p.name for p in UPLOADS_DIR.glob(f"{prefix}*") if p.is_file()]
+
+    def get_bytes(self, stored_name: str) -> bytes:
+        return (UPLOADS_DIR / stored_name).read_bytes()
 
 
 class S3CompatibleStorage:
@@ -115,6 +135,24 @@ class S3CompatibleStorage:
             ExpiresIn=PRESIGNED_URL_EXPIRE_SECONDS,
         )
         return RedirectResponse(url)
+
+    def list_keys(self, prefix: str) -> list[str]:
+        keys: list[str] = []
+        continuation_token: str | None = None
+        while True:
+            kwargs: dict = {"Bucket": self._bucket, "Prefix": prefix}
+            if continuation_token:
+                kwargs["ContinuationToken"] = continuation_token
+            response = self._client.list_objects_v2(**kwargs)
+            keys.extend(obj["Key"] for obj in response.get("Contents", []))
+            if not response.get("IsTruncated"):
+                break
+            continuation_token = response.get("NextContinuationToken")
+        return keys
+
+    def get_bytes(self, stored_name: str) -> bytes:
+        response = self._client.get_object(Bucket=self._bucket, Key=stored_name)
+        return response["Body"].read()
 
 
 @lru_cache

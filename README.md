@@ -331,6 +331,110 @@ Creating an account is open to anyone (it's already rate-limited - see
   relevant events via Python's standard `logging`, not prints. Verbosity is
   controlled by `LOG_LEVEL` in `backend/.env` (default `INFO`).
 
+## Backups and monitoring
+
+There's no production deployment yet (that's a separate, not-yet-started
+roadmap item), so what's here is scoped to actually protecting whatever
+Postgres instance `DATABASE_URL` points at today - the local
+docker-compose one - in a way that carries over cleanly once real
+hosting is chosen, without anything cloud-provider-specific baked in.
+
+### Backups
+
+`python -m scripts.backup_database` (from `backend/`) dumps the database
+(`pg_dump`, gzip-compressed) and stores it:
+
+- **Object storage (recommended)** — when `OBJECT_STORAGE_*` is
+  configured (see "Entry photos" above; the same config, same S3-compatible
+  abstraction, reused rather than reinvented), the dump uploads under a
+  `backups/` prefix in the same bucket.
+- **Local disk (fallback)** — when it isn't, the dump saves to
+  `backend/backups/` instead. **This is not a real safety net.** A
+  backup sitting on the same machine (often the same disk) as the
+  database it backs up survives a bad migration or an accidental
+  `DROP`, but not a lost/corrupted disk, a stolen machine, or the whole
+  docker-compose volume being wiped. It's useful for exercising the
+  mechanism end to end - and gives the daily sidecar below something to
+  actually do before you've configured object storage - but treat it as
+  a smoke test, not protection. Configure `OBJECT_STORAGE_*` for the
+  real thing.
+
+Backups older than `BACKUP_RETENTION_DAYS` (`backend/.env`, default 30)
+are deleted after each run - the same policy either way, based on the
+timestamp encoded in each backup's own filename rather than storage
+metadata.
+
+Failures are logged at `ERROR` level (`backup.dump_failed`,
+`backup.save_failed`), the same as every other failure path in this
+app - loud, not silent, and automatically forwarded to Sentry once
+`SENTRY_DSN` is configured (see "Security and operations" above; no
+extra wiring needed, it's the same `LoggingIntegration` every other
+error already goes through).
+
+**Restoring:**
+
+```
+# From a local file
+python -m scripts.restore_database backend/backups/backup_20260101T000000Z.sql.gz
+
+# From object storage - most recent backup, or a specific one with --key
+python -m scripts.restore_database --from-object-storage
+python -m scripts.restore_database --from-object-storage --key backups/backup_20260101T000000Z.sql.gz
+
+# Into a database other than DATABASE_URL
+python -m scripts.restore_database <file> --database-url postgresql://user:pass@host:5432/dbname
+```
+
+Restoring pipes the decompressed dump into `psql` against the target -
+normally a **fresh, empty** database created for exactly this purpose,
+not the live one still serving traffic, since the script doesn't drop
+or clear anything first.
+
+`pg_dump`/`psql` are expected on `PATH` (as they would be on a real
+deployed host with the Postgres client tools installed); override with
+`PG_DUMP_COMMAND`/`PSQL_COMMAND` in `backend/.env` if that's not where
+they live.
+
+**Automatic daily scheduling (current docker-compose setup):** an
+opt-in `backup` service is defined in the project-root
+`docker-compose.yml`, built from `backend/Dockerfile.backup` (same
+Postgres client version as the `postgres` service, with just enough
+Python to run the backup script - not the full app image). It isn't
+part of the default `docker compose up -d` set, so ordinary local
+dev/testing doesn't pay for building it - start it explicitly:
+
+```
+docker compose --profile backup up -d backup
+```
+
+It runs one backup immediately, then repeats every
+`BACKUP_INTERVAL_SECONDS` (default a day). This is deliberately a
+simple sleep loop, not a real cron daemon - enough for "keep it simple"
+at local/personal scale. **Once real hosting is chosen**, prefer that
+platform's own cron/scheduled-job feature (most PaaS/hosting providers
+have one) instead of this sidecar, or switch to genuine cron if you're
+managing a server yourself - either way, the underlying command is the
+same: `python -m scripts.backup_database` with `DATABASE_URL` and (for
+real protection) `OBJECT_STORAGE_*` configured.
+
+### Monitoring
+
+`GET /api/health` actually checks the database (`SELECT 1`) rather than
+unconditionally claiming ok - it returns `{"status": "ok"}` (`200`) when
+Postgres is reachable, or `{"status": "unhealthy", ...}` (`503`) when it
+isn't, logging the failure the same way everything else in this app
+does.
+
+**Once the app is deployed somewhere reachable from the internet** (not
+yet - see the top of this section), point an uptime monitor at
+`https://<your-domain>/api/health`. A free tier of a service like
+[UptimeRobot](https://uptimerobot.com/) or
+[Better Stack](https://betterstack.com/uptime) is plenty for a
+personal-scale app: create an HTTP(S) monitor, point it at that URL, and
+have it alert on anything other than a `200` (or on the request timing
+out). Nothing about `/api/health` requires a specific provider - any
+monitor that can hit a URL and check the status code works.
+
 ## API
 
 REST resources: `POST /api/users` (register, optional `invite_token`),
@@ -366,6 +470,8 @@ the entry itself).
 
 Spotify: `GET /api/spotify/playlists?q=` (public catalog search) and the
 account-linking endpoints described above.
+
+`GET /api/health` (no auth) - see "Backups and monitoring" above.
 
 ## Running locally
 

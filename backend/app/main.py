@@ -1,14 +1,18 @@
+import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+from .database import get_db  # noqa: E402
 from .logging_config import configure_logging  # noqa: E402  (must load after .env)
 from .rate_limit import limiter  # noqa: E402
 from .sentry_config import configure_sentry  # noqa: E402
@@ -16,6 +20,8 @@ from .routers import account, comments, entries, invites, sessions, spotify, use
 
 configure_logging()
 configure_sentry()
+
+logger = logging.getLogger(__name__)
 
 # Schema is owned by Alembic now (see backend/alembic/) - run
 # `alembic upgrade head` before starting the app instead of relying on
@@ -59,5 +65,15 @@ app.include_router(spotify.router)
 
 
 @app.get("/api/health")
-def health():
+def health(db: Session = Depends(get_db)):
+    """Actually checks the database rather than unconditionally claiming
+    ok - a dead/unreachable DB is exactly the condition an external
+    uptime monitor (see README "Monitoring") needs to catch, and this is
+    what it should be pointed at once the app is deployed somewhere
+    reachable from the internet."""
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        logger.error("health.database_unreachable", exc_info=True)
+        return JSONResponse(status_code=503, content={"status": "unhealthy", "detail": "database unreachable"})
     return {"status": "ok"}
