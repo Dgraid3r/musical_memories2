@@ -246,6 +246,13 @@ class JournalEntry(Base):
         back_populates="entry", cascade="all, delete-orphan", order_by="Comment.created_at"
     )
     tags: Mapped[list["Tag"]] = relationship(secondary=entry_tags, back_populates="entries", order_by="Tag.name")
+    # Audit log only - who edited this entry and when, plus a short label
+    # for what kind of edit it was. Deliberately not a version history: no
+    # snapshot of the old/new content is stored anywhere, so there's no
+    # diff or restore functionality built on this (see EntryEditEvent).
+    edit_events: Mapped[list["EntryEditEvent"]] = relationship(
+        back_populates="entry", cascade="all, delete-orphan", order_by="EntryEditEvent.edited_at.desc()"
+    )
 
     @property
     def owner_username(self) -> str:
@@ -292,6 +299,36 @@ class Comment(Base):
     @property
     def author_username(self) -> str:
         return DELETED_USER_DISPLAY_NAME if self.author.is_deleted else self.author.username
+
+
+class EntryEditEvent(Base):
+    """One row per edit made to an entry after creation - an audit log, not
+    version history. There is deliberately no snapshot of the changed
+    content here, just who changed something, when, and a short label for
+    roughly what kind of field changed (e.g. "content", "tags",
+    "visibility", "coauthors", "images") - enough to make the history more
+    useful than a bare timestamp list, without doing actual diffing or
+    supporting any restore/rollback. See entries.py update_entry/
+    add_images for where these get recorded, and get_entry_edit_history for
+    how they're read back."""
+
+    __tablename__ = "entry_edit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("journal_entries.id"), nullable=False, index=True)
+    editor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    edited_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    change_summary: Mapped[str] = mapped_column(String, nullable=False)
+
+    entry: Mapped["JournalEntry"] = relationship(back_populates="edit_events")
+    editor: Mapped["User"] = relationship()
+
+    @property
+    def editor_username(self) -> str:
+        # Same DELETED_USER_DISPLAY_NAME masking as JournalEntry.
+        # owner_username/Comment.author_username - reused, not
+        # reimplemented, per an editor who has since deleted their account.
+        return DELETED_USER_DISPLAY_NAME if self.editor.is_deleted else self.editor.username
 
 
 class SpotifyToken(Base):
