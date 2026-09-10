@@ -67,6 +67,12 @@ class JournalEntryOut(BaseModel):
     created_at: datetime
     images: list[EntryImageOut]
     tags: list[TagOut]
+    # All three null together (no location set) or all three set together -
+    # never a partial location. See models.JournalEntry's location columns
+    # and EntryLocationInput below.
+    latitude: float | None
+    longitude: float | None
+    location_name: str | None
 
 
 class EntryEditEventOut(BaseModel):
@@ -83,6 +89,16 @@ class EntryEditEventOut(BaseModel):
     change_summary: str
 
 
+class EntryLocationInput(BaseModel):
+    """A location is always set or cleared as a whole, never partially -
+    latitude/longitude alone would be meaningless without the display name
+    the user actually searched for and picked."""
+
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    location_name: str = Field(min_length=1, max_length=255)
+
+
 class JournalEntryUpdate(BaseModel):
     text: str | None = None
     is_public: bool | None = None
@@ -92,6 +108,21 @@ class JournalEntryUpdate(BaseModel):
     # None = leave tags unchanged; [] = clear them. Any co-author may set
     # this (tags are content, like text), unlike coauthor_usernames.
     tags: list[str] | None = None
+    # Unlike the fields above, this field's *value* alone can't distinguish
+    # "the client didn't mention location" from "the client explicitly
+    # wants it cleared" - both look like `None`. The router instead checks
+    # `"location" in payload.model_fields_set`: absent entirely = leave
+    # unchanged, present as JSON null = clear, present as an object = set.
+    location: EntryLocationInput | None = None
+
+
+class PlaceResult(BaseModel):
+    """What the frontend needs from a place search result - never
+    Nominatim's full raw response (see nominatim_client.py)."""
+
+    display_name: str
+    latitude: float
+    longitude: float
 
 
 class PlaylistResult(BaseModel):
