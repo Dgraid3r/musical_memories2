@@ -116,11 +116,17 @@ def search_users(
     current_user: User = Depends(get_current_user),
 ):
     """Username search for picking co-authors. Auth-gated (not the email-
-    bearing UserOut) so the user directory isn't scrapable anonymously."""
+    bearing UserOut) so the user directory isn't scrapable anonymously.
+
+    Excludes deleted accounts - they've had their real username scrubbed to
+    a synthetic placeholder (see routers/account.py) and can no longer log
+    in or act as a co-author, so surfacing them here would be both useless
+    and confusing."""
     stmt = (
         select(User)
         .where(User.username.ilike(f"%{q}%"))
         .where(User.id != current_user.id)
+        .where(User.deleted_at.is_(None))
         .order_by(User.username)
         .limit(10)
     )
