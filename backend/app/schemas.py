@@ -69,6 +69,20 @@ class JournalEntryOut(BaseModel):
     tags: list[TagOut]
 
 
+class EntryEditEventOut(BaseModel):
+    """One row of an entry's audit log - who edited it, when, and a short
+    label for what kind of field changed. No old/new value, no diff - this
+    is intentionally audit-log-only, not version history."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    editor_user_id: int
+    editor_username: str
+    edited_at: datetime
+    change_summary: str
+
+
 class JournalEntryUpdate(BaseModel):
     text: str | None = None
     is_public: bool | None = None

@@ -1,5 +1,6 @@
 import type {
   Comment,
+  EntryEditEvent,
   InvitePreview,
   JournalEntry,
   PlaylistResult,
@@ -297,6 +298,22 @@ export async function fetchEntryImageBlob(entryId: number, imageId: number, toke
 export async function fetchTags(workspaceId: number, token: string | null): Promise<string[]> {
   const res = await fetch(`/api/workspaces/${workspaceId}/entries/tags`, { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load tags'))
+  return res.json()
+}
+
+/** Audit log only - who edited this entry and when, plus a short label
+ * (e.g. "content", "tags"), most-recent-first. Same visibility rule as the
+ * entry itself (404 if the caller can't see the entry), no separate
+ * permission check. */
+export async function fetchEntryEditHistory(
+  workspaceId: number,
+  id: number,
+  token: string | null,
+): Promise<EntryEditEvent[]> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/entries/${id}/edit-history`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load edit history'))
   return res.json()
 }
 

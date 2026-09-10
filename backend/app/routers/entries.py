@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
-from ..models import EntryImage, JournalEntry, Tag, User, WorkspaceMembership
-from ..schemas import JournalEntryOut, JournalEntryUpdate
+from ..models import EntryEditEvent, EntryImage, JournalEntry, Tag, User, WorkspaceMembership
+from ..schemas import EntryEditEventOut, JournalEntryOut, JournalEntryUpdate
 from ..storage import get_storage
 from .workspaces import WRITE_ROLES, require_workspace_read_access, require_workspace_write_access
 
@@ -178,14 +178,22 @@ def _resolve_tags(names: list[str], db: Session, workspace_id: int) -> list[Tag]
     return list(existing) + new_tags
 
 
-def _save_images(images: list[UploadFile], entry_id: int, db: Session) -> None:
+def _save_images(images: list[UploadFile], entry_id: int, db: Session) -> list[EntryImage]:
+    """Returns the EntryImage rows actually created - a request can arrive
+    with zero usable files (every UploadFile missing a filename), and the
+    caller (add_images) uses this to decide whether an edit-history event
+    is warranted."""
     storage = get_storage()
+    saved: list[EntryImage] = []
     for image in images:
         if not image.filename:
             continue
         suffix = Path(image.filename).suffix
         stored_name = storage.save(image.file.read(), suffix)
-        db.add(EntryImage(entry_id=entry_id, filename=stored_name))
+        entry_image = EntryImage(entry_id=entry_id, filename=stored_name)
+        db.add(entry_image)
+        saved.append(entry_image)
+    return saved
 
 
 @router.get("", response_model=list[JournalEntryOut])
@@ -250,6 +258,23 @@ def get_entry(
     return _visible_or_404(entry, current_user, db)
 
 
+@router.get("/{entry_id}/edit-history", response_model=list[EntryEditEventOut])
+def get_entry_edit_history(
+    workspace_id: int,
+    entry_id: int,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """Same visibility rule as the entry itself (_visible_or_404) - no
+    separate permission logic for the history than for the entry it
+    belongs to. Most-recent-first (see JournalEntry.edit_events'
+    order_by)."""
+    require_workspace_read_access(workspace_id, db, current_user)
+    entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
+    entry = _visible_or_404(entry, current_user, db)
+    return entry.edit_events
+
+
 @router.post("", response_model=JournalEntryOut, status_code=201)
 def create_entry(
     workspace_id: int,
@@ -311,7 +336,9 @@ def add_images(
     if not _can_edit_content(entry, current_user):
         raise HTTPException(status_code=403, detail="You do not have permission to edit this entry")
 
-    _save_images(images, entry.id, db)
+    saved = _save_images(images, entry.id, db)
+    if saved:
+        db.add(EntryEditEvent(entry_id=entry.id, editor_user_id=current_user.id, change_summary="images"))
 
     db.commit()
     db.refresh(entry)
@@ -331,24 +358,47 @@ def update_entry(
     if not _can_edit_content(entry, current_user):
         raise HTTPException(status_code=403, detail="You do not have permission to edit this entry")
 
-    if payload.text is not None:
+    # Tracks which fields actually changed value (not just which fields
+    # were present in the request) - a PATCH that resends the entry's
+    # current values is a no-op and must not add an edit-history entry.
+    changed_fields: list[str] = []
+
+    if payload.text is not None and payload.text != entry.text:
         entry.text = payload.text
+        changed_fields.append("content")
 
     if payload.tags is not None:
-        entry.tags = _resolve_tags(payload.tags, db, workspace_id)
+        new_tags = _resolve_tags(payload.tags, db, workspace_id)
+        if {t.id for t in new_tags} != {t.id for t in entry.tags}:
+            entry.tags = new_tags
+            changed_fields.append("tags")
 
     # Visibility and co-author management stay primary-author-only, even for
     # a co-author who otherwise has content-edit rights on this entry.
     if payload.is_public is not None:
         if not _is_owner(entry, current_user):
             raise HTTPException(status_code=403, detail="Only the primary author can change visibility")
-        entry.is_public = payload.is_public
+        if payload.is_public != entry.is_public:
+            entry.is_public = payload.is_public
+            changed_fields.append("visibility")
 
     if payload.coauthor_usernames is not None:
         if not _is_owner(entry, current_user):
             raise HTTPException(status_code=403, detail="Only the primary author can manage co-authors")
-        entry.coauthors = _resolve_coauthors(
+        new_coauthors = _resolve_coauthors(
             payload.coauthor_usernames, db, exclude_user_id=entry.user_id, workspace_id=workspace_id
+        )
+        if {u.id for u in new_coauthors} != {u.id for u in entry.coauthors}:
+            entry.coauthors = new_coauthors
+            changed_fields.append("coauthors")
+
+    if changed_fields:
+        db.add(
+            EntryEditEvent(
+                entry_id=entry.id,
+                editor_user_id=current_user.id,
+                change_summary=", ".join(changed_fields),
+            )
         )
 
     db.commit()
