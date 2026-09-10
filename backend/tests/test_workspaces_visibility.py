@@ -287,7 +287,11 @@ def test_public_discovery_never_includes_entry_content(client, make_user, make_w
     res = client.get("/api/workspaces/public")
     assert res.status_code == 200
     match = next(w for w in res.json() if w["id"] == ws["id"])
-    assert set(match.keys()) == {"id", "name", "created_at"}
+    # entry_count/last_active_at are aggregates (how much/how recent), never
+    # entry content - "a very specific secret-ish detail" must not appear
+    # anywhere in the response.
+    assert set(match.keys()) == {"id", "name", "created_at", "entry_count", "last_active_at"}
+    assert "secret-ish" not in res.text
 
 
 def test_public_discovery_filters_by_name(client, make_user, make_workspace):
