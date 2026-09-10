@@ -201,6 +201,9 @@ def list_entries(
     workspace_id: int,
     q: str | None = Query(None, min_length=1, description="Full-text search across entry text and tags"),
     tag: str | None = Query(None, description="Filter to entries carrying this exact tag name"),
+    located_only: bool = Query(
+        False, description="Only entries with a location set - powers the map view, same visibility rules apply"
+    ),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
@@ -209,13 +212,19 @@ def list_entries(
     co-author on. A public workspace is readable with no auth token at all;
     a private one requires holding any role there. Optionally narrowed by a
     full-text search (`q`, matched against entry text and tag names via
-    Postgres tsvector) and/or an exact tag filter (`tag`)."""
+    Postgres tsvector), an exact tag filter (`tag`), and/or `located_only`
+    (for the map view) - reuses this same _apply_visibility call rather
+    than a separate endpoint or permission check, so a located entry the
+    caller couldn't otherwise see never appears on the map either."""
     require_workspace_read_access(workspace_id, db, current_user)
 
     stmt = _apply_visibility(select(JournalEntry), current_user, workspace_id)
 
     if tag is not None:
         stmt = stmt.where(JournalEntry.tags.any(Tag.name == tag.strip().lower()))
+
+    if located_only:
+        stmt = stmt.where(JournalEntry.latitude.isnot(None))
 
     if q is not None:
         tsquery = func.websearch_to_tsquery("english", q)
@@ -289,6 +298,12 @@ def create_entry(
     coauthor_usernames: list[str] = Form(default=[]),
     tags: list[str] = Form(default=[]),
     images: list[UploadFile] = File(default=[]),
+    # Optional, user-supplied location - see models.JournalEntry's comment
+    # and routers/places.py. Omitting all three is a completely normal
+    # entry, not an error state.
+    latitude: float | None = Form(None),
+    longitude: float | None = Form(None),
+    location_name: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -297,6 +312,9 @@ def create_entry(
     end_date = end_date or start_date
     if end_date < start_date:
         raise HTTPException(status_code=422, detail="end_date cannot be before start_date")
+
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(status_code=422, detail="latitude and longitude must be provided together")
 
     entry = JournalEntry(
         workspace_id=workspace_id,
@@ -311,6 +329,9 @@ def create_entry(
         is_public=is_public,
         coauthors=_resolve_coauthors(coauthor_usernames, db, exclude_user_id=current_user.id, workspace_id=workspace_id),
         tags=_resolve_tags(tags, db, workspace_id),
+        latitude=latitude,
+        longitude=longitude,
+        location_name=(location_name.strip() or None) if location_name else None,
     )
     db.add(entry)
     db.flush()
@@ -372,6 +393,25 @@ def update_entry(
         if {t.id for t in new_tags} != {t.id for t in entry.tags}:
             entry.tags = new_tags
             changed_fields.append("tags")
+
+    # Location is content, like text/tags - any co-author with content-edit
+    # rights can set or clear it, not just the primary author. `"location"
+    # in payload.model_fields_set` is what distinguishes "the client didn't
+    # mention location at all" (leave unchanged) from an explicit JSON
+    # `"location": null` (clear it) - payload.location being None alone is
+    # ambiguous between those two (see schemas.JournalEntryUpdate).
+    if "location" in payload.model_fields_set:
+        if payload.location is None:
+            if entry.latitude is not None or entry.longitude is not None or entry.location_name is not None:
+                entry.latitude = None
+                entry.longitude = None
+                entry.location_name = None
+                changed_fields.append("location")
+        else:
+            new_location = (payload.location.latitude, payload.location.longitude, payload.location.location_name)
+            if new_location != (entry.latitude, entry.longitude, entry.location_name):
+                entry.latitude, entry.longitude, entry.location_name = new_location
+                changed_fields.append("location")
 
     # Visibility and co-author management stay primary-author-only, even for
     # a co-author who otherwise has content-edit rights on this entry.
