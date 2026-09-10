@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { addImages, updateEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
-import type { JournalEntry } from '../types'
+import type { EntryLocation, JournalEntry } from '../types'
 import CommentThread from './CommentThread'
 import EntryEditHistory from './EntryEditHistory'
 import EntryPhoto from './EntryPhoto'
+import LocationPicker from './LocationPicker'
 import TagInput from './TagInput'
 
 interface Props {
@@ -40,6 +41,9 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
   const [editingTags, setEditingTags] = useState(false)
   const [savingTags, setSavingTags] = useState(false)
   const [draftTags, setDraftTags] = useState<string[]>([])
+  const [editingLocation, setEditingLocation] = useState(false)
+  const [savingLocation, setSavingLocation] = useState(false)
+  const [draftLocation, setDraftLocation] = useState<EntryLocation | null>(null)
   const isOwner = user?.id === entry.user_id
   const isCoauthor = entry.coauthors.some((c) => c.id === user?.id)
   const canEditContent = isOwner || isCoauthor
@@ -72,6 +76,27 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
     }
   }
 
+  function startEditingLocation() {
+    setDraftLocation(
+      entry.latitude !== null && entry.longitude !== null && entry.location_name !== null
+        ? { latitude: entry.latitude, longitude: entry.longitude, location_name: entry.location_name }
+        : null,
+    )
+    setEditingLocation(true)
+  }
+
+  async function saveLocation() {
+    if (!token) return
+    setSavingLocation(true)
+    try {
+      const updated = await updateEntry(workspaceId, entry.id, { location: draftLocation }, token)
+      onUpdated(updated)
+      setEditingLocation(false)
+    } finally {
+      setSavingLocation(false)
+    }
+  }
+
   async function handleAddPhotos(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
     e.target.value = ''
@@ -86,7 +111,7 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
   }
 
   return (
-    <article className="entry-card">
+    <article className="entry-card" id={`entry-${entry.id}`}>
       <header>
         <div>
           <time dateTime={entry.start_date}>{formatDateRange(entry.start_date, entry.end_date)}</time>
@@ -136,6 +161,34 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
           {canEditContent && (
             <button type="button" className="link-btn" onClick={startEditingTags}>
               {entry.tags.length > 0 ? 'Edit tags' : '+ Add tags'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {editingLocation ? (
+        <div className="location-edit">
+          <LocationPicker value={draftLocation} onChange={setDraftLocation} />
+          <div className="location-edit-actions">
+            <button type="button" onClick={saveLocation} disabled={savingLocation}>
+              {savingLocation ? 'Saving...' : 'Save location'}
+            </button>
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => setEditingLocation(false)}
+              disabled={savingLocation}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="entry-location-row">
+          {entry.location_name && <span className="entry-location-name">&#128205; {entry.location_name}</span>}
+          {canEditContent && (
+            <button type="button" className="link-btn" onClick={startEditingLocation}>
+              {entry.location_name ? 'Edit location' : '+ Add location'}
             </button>
           )}
         </div>
