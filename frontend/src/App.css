@@ -435,6 +435,33 @@ body {
   padding: 8px 10px;
 }
 
+/* Secondary detail, deliberately quieter than the comment thread above it -
+   smaller text, no background, collapsed by default (see
+   EntryEditHistory.tsx). */
+.edit-history {
+  margin-top: 4px;
+}
+
+.edit-history-body {
+  margin-top: 6px;
+}
+
+.edit-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: #9a9a9a;
+}
+
+.edit-history-editor {
+  font-weight: 600;
+  color: #c7c7c7;
+}
+
 .comment-meta {
   display: flex;
   align-items: baseline;

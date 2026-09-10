@@ -3,6 +3,7 @@ import { addImages, updateEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import type { JournalEntry } from '../types'
 import CommentThread from './CommentThread'
+import EntryEditHistory from './EntryEditHistory'
 import EntryPhoto from './EntryPhoto'
 import TagInput from './TagInput'
 
@@ -166,6 +167,7 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
       />
 
       <CommentThread workspaceId={workspaceId} entryId={entry.id} entryOwnerId={entry.user_id} canWrite={canWrite} />
+      <EntryEditHistory workspaceId={workspaceId} entryId={entry.id} />
     </article>
   )
 }

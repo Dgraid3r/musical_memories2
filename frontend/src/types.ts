@@ -48,6 +48,16 @@ export interface User {
   created_at: string
 }
 
+// One row of an entry's audit log (see GET .../entries/{id}/edit-history).
+// Deliberately no old/new value - audit-log only, not version history.
+export interface EntryEditEvent {
+  id: number
+  editor_user_id: number
+  editor_username: string
+  edited_at: string
+  change_summary: string
+}
+
 export interface Comment {
   id: number
   entry_id: number
