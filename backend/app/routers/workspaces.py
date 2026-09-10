@@ -2,15 +2,16 @@ import logging
 import os
 import secrets
 from datetime import datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
 from ..email import send_email
-from ..models import User, Workspace, WorkspaceInvite, WorkspaceMembership
+from ..models import JournalEntry, User, Workspace, WorkspaceInvite, WorkspaceMembership
 from ..schemas import (
     PublicWorkspaceOut,
     WorkspaceCreate,
@@ -29,6 +30,14 @@ router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 
 WRITE_ROLES = ("owner", "member")
 INVITE_EXPIRE_DAYS = 7
+
+# No existing list endpoint in this codebase takes limit/offset as query
+# params to match (entries.list_entries has no pagination at all yet, and
+# users.search_users hardcodes .limit(10) with no param) - these defaults
+# are a fresh, conventional choice: cap well below anything that could be
+# used to scrape the whole public directory in one request.
+PUBLIC_WORKSPACES_DEFAULT_LIMIT = 20
+PUBLIC_WORKSPACES_MAX_LIMIT = 100
 
 
 def _get_membership(workspace_id: int, current_user: User, db: Session) -> WorkspaceMembership | None:
@@ -115,16 +124,66 @@ def _send_invite_email(invite: WorkspaceInvite, workspace: Workspace, inviter: U
 @router.get("/public", response_model=list[PublicWorkspaceOut])
 def browse_public_workspaces(
     q: str | None = Query(None, min_length=1, description="Filter by name"),
+    sort: Literal["active", "name"] = Query(
+        "active", description="active = most recently active first (default); name = alphabetical"
+    ),
+    limit: int = Query(PUBLIC_WORKSPACES_DEFAULT_LIMIT, ge=1, le=PUBLIC_WORKSPACES_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     """Discovery - no auth required, and deliberately returns just enough
-    to identify a workspace (name, when it was created), never entry
-    content and never a private workspace."""
-    stmt = select(Workspace).where(Workspace.visibility == "public")
+    to identify and gauge a workspace (name, when it was created, how many
+    entries it has, and when it was last active) - never entry content and
+    never a private workspace.
+
+    "Most recently active" is the latest JournalEntry.created_at across
+    every entry in the workspace (public or private - a count/timestamp is
+    an activity signal, not a content disclosure), falling back to the
+    workspace's own created_at when it has no entries yet, so an empty
+    workspace is never excluded - just ranked among the others by when it
+    was created."""
+    entry_stats = (
+        select(
+            JournalEntry.workspace_id.label("workspace_id"),
+            func.count(JournalEntry.id).label("entry_count"),
+            func.max(JournalEntry.created_at).label("last_entry_at"),
+        )
+        .group_by(JournalEntry.workspace_id)
+        .subquery()
+    )
+    entry_count_expr = func.coalesce(entry_stats.c.entry_count, 0)
+    last_active_expr = func.coalesce(entry_stats.c.last_entry_at, Workspace.created_at)
+
+    stmt = (
+        select(Workspace, entry_count_expr, last_active_expr)
+        .outerjoin(entry_stats, entry_stats.c.workspace_id == Workspace.id)
+        .where(Workspace.visibility == "public")
+    )
     if q:
         stmt = stmt.where(Workspace.name.ilike(f"%{q}%"))
-    stmt = stmt.order_by(Workspace.name)
-    return db.scalars(stmt).all()
+
+    if sort == "name":
+        stmt = stmt.order_by(Workspace.name)
+    else:
+        # Tie-broken by id (desc) for a stable, deterministic order across
+        # pages - two workspaces can otherwise share an identical
+        # last_active_at (both empty, created in the same instant; or two
+        # entries created in the same instant).
+        stmt = stmt.order_by(last_active_expr.desc(), Workspace.id.desc())
+
+    stmt = stmt.limit(limit).offset(offset)
+
+    rows = db.execute(stmt).all()
+    return [
+        PublicWorkspaceOut(
+            id=workspace.id,
+            name=workspace.name,
+            created_at=workspace.created_at,
+            entry_count=entry_count,
+            last_active_at=last_active_at,
+        )
+        for workspace, entry_count, last_active_at in rows
+    ]
 
 
 @router.post("", response_model=WorkspaceOut, status_code=201)

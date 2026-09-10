@@ -5,6 +5,7 @@ import type {
   JournalEntry,
   PlaylistResult,
   PublicWorkspace,
+  PublicWorkspaceSort,
   User,
   UserPublic,
   Workspace,
@@ -111,10 +112,25 @@ export async function updateWorkspaceVisibility(
   return res.json()
 }
 
-/** No auth required - public discovery. */
-export async function fetchPublicWorkspaces(q?: string): Promise<PublicWorkspace[]> {
-  const qs = q ? `?q=${encodeURIComponent(q)}` : ''
-  const res = await fetch(`/api/workspaces/public${qs}`)
+export interface PublicWorkspaceSearchParams {
+  q?: string
+  sort?: PublicWorkspaceSort
+  limit?: number
+  offset?: number
+}
+
+/** No auth required - public discovery. Server default (no `sort` sent) is
+ * "active" (most recently active first); pass sort: 'name' for the old
+ * alphabetical behavior. `offset` is how the caller pages through results
+ * ("load more" - see PublicWorkspaceBrowser.tsx). */
+export async function fetchPublicWorkspaces(params: PublicWorkspaceSearchParams = {}): Promise<PublicWorkspace[]> {
+  const query = new URLSearchParams()
+  if (params.q) query.set('q', params.q)
+  if (params.sort) query.set('sort', params.sort)
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  if (params.offset !== undefined) query.set('offset', String(params.offset))
+  const qs = query.toString()
+  const res = await fetch(`/api/workspaces/public${qs ? `?${qs}` : ''}`)
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load public journals'))
   return res.json()
 }
