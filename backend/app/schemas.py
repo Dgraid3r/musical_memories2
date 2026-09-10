@@ -200,13 +200,22 @@ class PublicWorkspaceOut(BaseModel):
     """Just enough to identify/browse to a public workspace from the
     discovery endpoint - never entry content, and never anything about a
     caller's own role (the discovery endpoint needs no auth at all, so
-    there may not even be a caller)."""
+    there may not even be a caller). entry_count and last_active_at are
+    aggregates only (how much/how recent), never anything about what's
+    actually in an entry - constructed explicitly by the router rather
+    than via from_attributes, since neither is a real Workspace column."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     name: str
     created_at: datetime
+    entry_count: int
+    # The most recent JournalEntry.created_at across every entry in this
+    # workspace (public or private - this is an activity signal, not a
+    # content disclosure), or the workspace's own created_at if it has no
+    # entries yet. Same value the "active" sort ranks by.
+    last_active_at: datetime
 
 
 class WorkspaceVisibilityUpdate(BaseModel):
