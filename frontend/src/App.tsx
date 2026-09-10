@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ApiError, confirmEmailVerification, deleteEntry, fetchEntries, previewInvite } from './api'
 import { useAuth } from './auth/AuthContext'
+import AccountSettings from './components/AccountSettings'
 import AuthForm from './components/AuthForm'
 import EntryCard from './components/EntryCard'
 import ForgotPasswordPage from './components/ForgotPasswordPage'
@@ -69,6 +70,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showPublicBrowser, setShowPublicBrowser] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showAccountSettings, setShowAccountSettings] = useState(false)
   const [showForgotPassword, setShowForgotPassword] = useState(false)
   const spotifyNotice = useSpotifyCallbackNotice()
 
@@ -220,6 +222,9 @@ export default function App() {
             Browse public
           </button>
           <span>{user.username}</span>
+          <button type="button" className="link-btn" onClick={() => setShowAccountSettings(true)}>
+            Account
+          </button>
           <SpotifyConnect />
           <button type="button" className="link-btn" onClick={logout}>
             Log out
@@ -234,6 +239,7 @@ export default function App() {
       <VerifyEmailBanner />
 
       {showSettings && activeWorkspace && <WorkspaceSettings onClose={() => setShowSettings(false)} />}
+      {showAccountSettings && <AccountSettings onClose={() => setShowAccountSettings(false)} />}
 
       <main>
         {workspaceLoading && <p>Loading workspaces...</p>}
