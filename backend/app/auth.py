@@ -54,7 +54,16 @@ def _user_from_token(token: str, db: Session) -> User | None:
     user_id = payload.get("sub")
     if user_id is None:
         return None
-    return db.get(User, int(user_id))
+    user = db.get(User, int(user_id))
+    if user is not None and user.is_deleted:
+        # There's no server-side session table for a stateless JWT to
+        # revoke from (see sessions.py) - this is what "revoking all
+        # active sessions" on deletion actually means here: any token
+        # issued before deletion, on any device, stops authenticating
+        # immediately, rather than staying valid until it naturally
+        # expires up to ACCESS_TOKEN_EXPIRE_MINUTES later.
+        return None
+    return user
 
 
 def get_current_user(

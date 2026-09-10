@@ -22,6 +22,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .crypto import EncryptedString
 from .database import Base
 
+# Shown in place of a deleted account's real name anywhere the app renders
+# authorship (entry owner/co-authors, comment authors) - see User.deleted_at
+# and User.is_deleted. Deliberately a fixed, generic string rather than the
+# scrubbed placeholder username actually stored on the row (e.g.
+# "deleted-user-42"), which exists only to satisfy the unique constraint,
+# not to be shown to anyone.
+DELETED_USER_DISPLAY_NAME = "Deleted user"
+
 entry_coauthors = Table(
     "entry_coauthors",
     Base.metadata,
@@ -49,6 +57,14 @@ class User(Base):
     # See EmailVerificationToken.
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Set once, permanently, on self-deletion (see routers/account.py) - the
+    # row itself is never deleted, so every entry/comment this user
+    # authored keeps its real foreign key and survives untouched; only
+    # this user's own identifying fields get scrubbed. Null means "not
+    # deleted", the same nullable-timestamp-as-marker pattern already used
+    # by WorkspaceInvite.revoked_at/accepted_at and
+    # PasswordResetToken.used_at.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     entries: Mapped[list["JournalEntry"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
@@ -68,6 +84,10 @@ class User(Base):
     password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
 
 
 class Workspace(Base):
@@ -229,7 +249,7 @@ class JournalEntry(Base):
 
     @property
     def owner_username(self) -> str:
-        return self.owner.username
+        return DELETED_USER_DISPLAY_NAME if self.owner.is_deleted else self.owner.username
 
 
 class EntryImage(Base):
@@ -271,7 +291,7 @@ class Comment(Base):
 
     @property
     def author_username(self) -> str:
-        return self.author.username
+        return DELETED_USER_DISPLAY_NAME if self.author.is_deleted else self.author.username
 
 
 class SpotifyToken(Base):

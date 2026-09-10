@@ -4,15 +4,17 @@ import secrets
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user, hash_password
+from ..auth import get_current_user, hash_password, verify_password
 from ..database import get_db
 from ..email import send_email
-from ..models import EmailVerificationToken, PasswordResetToken, User
+from ..models import EmailVerificationToken, PasswordResetToken, User, WorkspaceMembership
 from ..rate_limit import AUTH_RATE_LIMIT, limiter
 from ..schemas import (
+    AccountDeleteInput,
+    AccountDeleteOut,
     EmailVerificationResendOut,
     PasswordResetConfirmInput,
     PasswordResetRequestInput,
@@ -153,3 +155,113 @@ def confirm_password_reset(
     db.commit()
     logger.info("auth.password_reset_completed user_id=%s", user.id)
     return PasswordResetRequestOut(detail="Your password has been reset. You can now log in with your new password.")
+
+
+# --- Account deletion ------------------------------------------------------
+
+
+@router.delete("", response_model=AccountDeleteOut)
+@limiter.limit(AUTH_RATE_LIMIT)
+def delete_account(
+    request: Request,
+    payload: AccountDeleteInput,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Permanently deletes the caller's own account.
+
+    The User row itself is never deleted - it's anonymized in place (see
+    models.User.deleted_at / is_deleted). Every entry or comment this user
+    authored in a shared workspace survives untouched under the same
+    user_id; only this user's own identifying fields (username, email,
+    password) get scrubbed, and anywhere the app renders that authorship it
+    shows models.DELETED_USER_DISPLAY_NAME instead of a real name once
+    is_deleted is set.
+
+    Sole ownership of a workspace that still has other members blocks
+    deletion outright - the caller must transfer ownership first through
+    the existing PATCH /api/workspaces/{id}/transfer-ownership endpoint
+    (this endpoint deliberately never performs a transfer itself). Sole
+    ownership of a workspace where the caller is also the *only* member is
+    safe to cascade-delete along with the account: nobody else could
+    possibly have write access to it (a co-author must already be a
+    workspace member), so nothing shared is lost.
+    """
+    if not verify_password(payload.password, current_user.hashed_password):
+        logger.warning("account.delete_failed_wrong_password user_id=%s", current_user.id)
+        raise HTTPException(status_code=401, detail="Incorrect password")
+
+    owned_memberships = db.scalars(
+        select(WorkspaceMembership).where(
+            WorkspaceMembership.user_id == current_user.id,
+            WorkspaceMembership.role == "owner",
+        )
+    ).all()
+
+    blocking_workspaces = []
+    solely_owned_workspaces = []
+    for membership in owned_memberships:
+        other_members_count = db.scalar(
+            select(func.count())
+            .select_from(WorkspaceMembership)
+            .where(
+                WorkspaceMembership.workspace_id == membership.workspace_id,
+                WorkspaceMembership.user_id != current_user.id,
+            )
+        )
+        if other_members_count > 0:
+            blocking_workspaces.append(membership.workspace)
+        else:
+            solely_owned_workspaces.append(membership.workspace)
+
+    if blocking_workspaces:
+        names = ", ".join(f'"{w.name}"' for w in blocking_workspaces)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Transfer ownership of the following workspace(s) before deleting your account: "
+                f"{names}. Use the workspace settings to transfer ownership to another member first."
+            ),
+        )
+
+    # Safe to cascade - the caller is the only member, so deleting the
+    # workspace deletes only their own content (Workspace.memberships/
+    # entries/tags/invites all cascade="all, delete-orphan").
+    for workspace in solely_owned_workspaces:
+        db.delete(workspace)
+
+    # Every remaining membership (non-owner roles, or owner roles already
+    # handled above) is removed outright - a deleted account can't log in
+    # anymore, so staying listed as a workspace member would be misleading.
+    for membership in db.scalars(
+        select(WorkspaceMembership).where(WorkspaceMembership.user_id == current_user.id)
+    ):
+        db.delete(membership)
+
+    if current_user.spotify_token is not None:
+        db.delete(current_user.spotify_token)
+
+    for token in db.scalars(
+        select(EmailVerificationToken).where(EmailVerificationToken.user_id == current_user.id)
+    ):
+        db.delete(token)
+    for token in db.scalars(
+        select(PasswordResetToken).where(PasswordResetToken.user_id == current_user.id)
+    ):
+        db.delete(token)
+
+    # Scrub PII. The placeholder username/email only need to satisfy the
+    # unique constraints on those columns - they're never shown to anyone;
+    # DELETED_USER_DISPLAY_NAME is what actually gets displayed once
+    # is_deleted is set (see owner_username/author_username/UserPublic).
+    # ".invalid" is the RFC 2606 reserved TLD guaranteed to never be a real
+    # registrable domain, so this placeholder can never collide with a
+    # future real registration.
+    current_user.username = f"deleted-user-{current_user.id}"
+    current_user.email = f"deleted-user-{current_user.id}@deleted.invalid"
+    current_user.hashed_password = hash_password(secrets.token_urlsafe(32))
+    current_user.deleted_at = datetime.utcnow()
+
+    db.commit()
+    logger.warning("account.deleted user_id=%s", current_user.id)
+    return AccountDeleteOut(detail="Your account has been permanently deleted.")

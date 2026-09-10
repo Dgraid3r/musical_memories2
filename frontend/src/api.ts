@@ -204,6 +204,21 @@ export async function confirmPasswordReset(resetToken: string, newPassword: stri
   return res.json()
 }
 
+/** Permanently deletes the caller's own account. Requires re-entering the
+ * current password (see AccountDeleteInput). A 409 means the caller solely
+ * owns a workspace that still has other members - its message names
+ * exactly which workspace(s) need ownership transferred first via the
+ * existing transferWorkspaceOwnership flow. */
+export async function deleteAccount(password: string, token: string): Promise<{ detail: string }> {
+  const res = await fetch('/api/account', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ password }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to delete account'))
+  return res.json()
+}
+
 export async function updateWorkspaceMemberRole(
   workspaceId: number,
   userId: number,
