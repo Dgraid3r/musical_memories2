@@ -1,8 +1,10 @@
 import type {
   Comment,
   EntryEditEvent,
+  EntryLocation,
   InvitePreview,
   JournalEntry,
+  PlaceResult,
   PlaylistResult,
   PublicWorkspace,
   PublicWorkspaceSort,
@@ -275,11 +277,26 @@ export async function transferWorkspaceOwnership(
   return res.json()
 }
 
+// --- Places (geocoding, backend-proxied) ----------------------------------
+
+/** No auth required - same bar as Spotify's app-only playlist search.
+ * Proxied through the backend rather than called directly (see
+ * nominatim_client.py for why: a required User-Agent header and staying
+ * within Nominatim's free-tier rate policy). */
+export async function searchPlaces(query: string): Promise<PlaceResult[]> {
+  const res = await fetch(`/api/places/search?q=${encodeURIComponent(query)}`)
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Place search failed'))
+  return res.json()
+}
+
 // --- Entries (workspace-scoped) -----------------------------------------
 
 export interface EntrySearchParams {
   q?: string
   tag?: string
+  /** Only entries with a location set - powers the map view. Same
+   * visibility rules as every other entry listing. */
+  locatedOnly?: boolean
 }
 
 export async function fetchEntries(
@@ -290,6 +307,7 @@ export async function fetchEntries(
   const query = new URLSearchParams()
   if (params.q) query.set('q', params.q)
   if (params.tag) query.set('tag', params.tag)
+  if (params.locatedOnly) query.set('located_only', 'true')
   const qs = query.toString()
   const res = await fetch(`/api/workspaces/${workspaceId}/entries${qs ? `?${qs}` : ''}`, {
     headers: authHeaders(token),
@@ -344,7 +362,19 @@ export async function deleteEntry(workspaceId: number, id: number, token: string
 export async function updateEntry(
   workspaceId: number,
   id: number,
-  updates: { text?: string; is_public?: boolean; coauthor_usernames?: string[]; tags?: string[] },
+  updates: {
+    text?: string
+    is_public?: boolean
+    coauthor_usernames?: string[]
+    tags?: string[]
+    // Omit this key entirely to leave the location unchanged (the usual
+    // case for e.g. a text-only edit); pass null to clear it; pass an
+    // EntryLocation to set it. JSON.stringify below preserves exactly
+    // that distinction - an omitted (undefined) key never appears in the
+    // request body, while an explicit null does - matching the backend's
+    // model_fields_set check (see routers/entries.py update_entry).
+    location?: EntryLocation | null
+  },
   token: string,
 ): Promise<JournalEntry> {
   const res = await fetch(`/api/workspaces/${workspaceId}/entries/${id}`, {
@@ -378,6 +408,7 @@ export interface NewEntryInput {
   isPublic: boolean
   coauthorUsernames: string[]
   tags: string[]
+  location: EntryLocation | null
 }
 
 export async function createEntry(workspaceId: number, input: NewEntryInput, token: string): Promise<JournalEntry> {
@@ -393,6 +424,11 @@ export async function createEntry(workspaceId: number, input: NewEntryInput, tok
   for (const username of input.coauthorUsernames) form.append('coauthor_usernames', username)
   for (const tag of input.tags) form.append('tags', tag)
   for (const image of input.images) form.append('images', image)
+  if (input.location) {
+    form.set('latitude', String(input.location.latitude))
+    form.set('longitude', String(input.location.longitude))
+    form.set('location_name', input.location.location_name)
+  }
 
   const res = await fetch(`/api/workspaces/${workspaceId}/entries`, {
     method: 'POST',
