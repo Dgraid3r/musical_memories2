@@ -209,6 +209,105 @@ available whenever you want an independent backup running from the
 deployed environment specifically, using the exact same script already
 verified locally.
 
+## Staging environment
+
+Staging is a second, fully separate copy of the app - its own Railway
+project, its own database, its own storage - that you can push changes
+to and try out before they reach the real production app real users are
+on. It's completely optional, but worth setting up once you're making
+regular changes, so you have somewhere safe to catch a problem before it
+affects anyone.
+
+The two environments share nothing at runtime: staging has its own
+database (so testing something there, even something destructive, can
+never touch real production data) and its own photo storage bucket (see
+the bucket-vs-shared-prefix note in step 3 below for why). The only
+thing they share is this one GitHub repository.
+
+### 1. Create a second Railway project for staging
+
+Repeat "1. Create a Railway account and project" above, but:
+
+- Do **not** create a new Railway account - use the same one.
+- Do create a **new, separate Railway project** (not a new service inside
+  your existing production project, and not Railway's built-in
+  "environments" feature within one project - a genuinely separate
+  project, so staging can never accidentally share a database or
+  variable with production).
+- Connect the same GitHub repository again.
+- When Railway asks which branch to deploy, choose **`staging`** instead
+  of `master`. If it doesn't ask right away, go to the service's
+  **Settings** -> **Source** and set the branch there.
+
+This gives you the same "deploys automatically on push" behavior as
+production, just watching a different branch: from now on, pushing to
+`staging` redeploys the staging app, and pushing to `master` still
+redeploys production, independently of each other.
+
+### 2. Add a separate Postgres database
+
+Repeat "2. Add a Postgres database" above, but inside this **new**
+staging project. This creates a brand new, empty database that belongs
+only to staging - it starts with no data at all (not a copy of
+production), and running migrations against it or even wiping it
+entirely has zero effect on the real app.
+
+### 3. Set staging's environment variables
+
+Repeat "3. Create a Cloudflare R2 bucket for photo storage" and "4. Set
+the rest of the required and optional variables" above, inside the
+staging project, with these differences:
+
+- **Object storage: create a second, separate R2 bucket** (e.g.
+  `musical-memories-photos-staging`) rather than reusing production's
+  bucket with some kind of "staging" prefix inside it. A second bucket
+  is simpler to set up (it's the exact same three steps you already did
+  for production, just once more) and gives real isolation - the app
+  doesn't currently have any concept of a prefix to keep staging and
+  production photos apart within one shared bucket, so a second bucket
+  is both the easier and the actually-safe choice, not just a
+  preference.
+- **Spotify: reuse the same Spotify app**, don't create a second one -
+  just add an *additional* Redirect URI to it (Spotify apps support more
+  than one). You'll add the exact staging URL in step 4 below, once you
+  know it. Use the same `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` values
+  in both the production and staging Railway projects.
+- **Everything else** (`JWT_SECRET_KEY`, `TOKEN_ENCRYPTION_KEY`,
+  `SMTP_*`, `SENTRY_DSN`, etc.) - generate fresh values for staging
+  rather than copying production's. There's no security benefit to
+  staging and production sharing a session-signing key or an encryption
+  key, and keeping them different means a staging login token, for
+  instance, is never valid against production either.
+
+### 4. Point Spotify at the staging address too
+
+Once staging's first deploy succeeds, repeat "5. Point Spotify at your
+real deployed address" above using staging's own Railway URL (it'll be a
+different `*.up.railway.app` address than production's) - but instead of
+replacing the Redirect URI in the Spotify Developer Dashboard, **add it
+as a second one** alongside production's, so both URLs work at the same
+time. Set `SPOTIFY_REDIRECT_URI` and `FRONTEND_URL` in the *staging*
+Railway project to staging's own URL, exactly as you did for production.
+
+### The new workflow going forward
+
+With staging set up, the day-to-day habit changes slightly:
+
+1. Make your changes on a branch (as before), and open a pull request or
+   push into **`staging`** first, not `master`.
+2. Once that lands, Railway automatically redeploys the staging app.
+   Try the change out there.
+3. When you're satisfied it works, **merge `staging` into `master`**
+   (or open a pull request from `staging` to `master` if you'd rather
+   review the combined diff first) to promote it to production. Railway
+   then automatically redeploys the real app from the updated `master`.
+
+`master` is always what's actually live for real users; `staging` is
+always what's being tried out next. The automated tests (see the
+README's "Tests" section) run the same way against both branches, so a
+broken change is caught before it even reaches staging, let alone
+production.
+
 ## What to expect after this is done
 
 Once steps 1-5 are complete, the app is live at your Railway URL, changes

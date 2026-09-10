@@ -520,7 +520,9 @@ From `frontend/`: `npm run lint` and `npm run build` (the build itself
 type-checks via `tsc -b` first).
 
 `.github/workflows/ci.yml` runs all of the above automatically on every
-push and pull request against `master` (backend migrations + tests
-against a real Postgres service container, frontend lint + build) -
-nothing extra to run by hand before opening a PR, though running them
-locally first is still the fastest way to catch a problem.
+push and pull request against `master` or `staging` (backend migrations
++ tests against a real Postgres service container, frontend lint +
+build) - nothing extra to run by hand before opening a PR, though
+running them locally first is still the fastest way to catch a problem.
+See `DEPLOYMENT.md`'s "Staging environment" section for what `staging`
+is and how it fits into the deploy workflow.
