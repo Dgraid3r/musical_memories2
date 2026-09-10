@@ -10,7 +10,7 @@ from sqlalchemy import engine_from_config, pool
 # works with just DATABASE_URL set there - no need to export it separately.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from app.database import Base  # noqa: E402
+from app.database import Base, normalize_database_url  # noqa: E402
 from app import models  # noqa: E402,F401  (registers all tables on Base.metadata)
 
 config = context.config
@@ -21,7 +21,7 @@ if not database_url:
         "DATABASE_URL is not set. Copy backend/.env.example to backend/.env and point it at your "
         "Postgres instance, or export DATABASE_URL before running alembic."
     )
-config.set_main_option("sqlalchemy.url", database_url)
+config.set_main_option("sqlalchemy.url", normalize_database_url(database_url))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

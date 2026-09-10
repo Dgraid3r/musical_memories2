@@ -1,18 +1,23 @@
 """A real dump -> restore -> verify round trip, not just "pg_dump exited
-0". This dev machine has no native pg_dump/psql install, so PG_DUMP_COMMAND
-/PSQL_COMMAND (an env override backup_database.py/restore_database.py
-already support, meant for a deployment where the client tools live at a
-non-default path) are pointed at the exact same binaries running inside
-the docker-compose postgres container the test database itself lives in
-- a real deployment would instead have postgresql-client installed
-alongside the app and leave these unset, using plain "pg_dump"/"psql" on
-PATH; the script code path exercised here is identical either way.
+0". PG_DUMP_COMMAND/PSQL_COMMAND (an env override backup_database.py/
+restore_database.py already support, meant for a deployment where the
+client tools live at a non-default path) are respected if the
+environment already sets them - CI sets them to plain "pg_dump"/"psql"
+(see .github/workflows/ci.yml), since GitHub's Postgres *service
+container* is reachable directly over TCP and has no docker-compose
+service to exec into. Locally, where this dev machine has no native
+pg_dump/psql install and neither var is set, this falls back to routing
+through the exact binaries already running inside the docker-compose
+postgres container instead. Either way the script code path exercised
+is identical - only how the pg_dump/psql binary itself gets invoked
+differs.
 
 Restores into a freshly created scratch database rather than the shared
 musical_memories_test database other tests depend on, so this never
 risks disrupting anything else.
 """
 
+import os
 import uuid
 from pathlib import Path
 
@@ -30,8 +35,13 @@ def _docker_exec_command(tool: str) -> str:
 
 
 def test_dump_and_restore_round_trip_preserves_real_data(monkeypatch, make_user):
-    monkeypatch.setenv("PG_DUMP_COMMAND", _docker_exec_command("pg_dump"))
-    monkeypatch.setenv("PSQL_COMMAND", _docker_exec_command("psql"))
+    # Respect an already-configured PG_DUMP_COMMAND/PSQL_COMMAND (CI) -
+    # only fall back to the docker-compose-exec form when neither is set
+    # (local dev on a machine with no native pg_dump/psql).
+    if "PG_DUMP_COMMAND" not in os.environ:
+        monkeypatch.setenv("PG_DUMP_COMMAND", _docker_exec_command("pg_dump"))
+    if "PSQL_COMMAND" not in os.environ:
+        monkeypatch.setenv("PSQL_COMMAND", _docker_exec_command("psql"))
 
     # Real, distinctive data in the live test database before the dump -
     # this is what proves the restored database is actually usable, not

@@ -2,9 +2,10 @@ import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
@@ -77,3 +78,33 @@ def health(db: Session = Depends(get_db)):
         logger.error("health.database_unreachable", exc_info=True)
         return JSONResponse(status_code=503, content={"status": "unhealthy", "detail": "database unreachable"})
     return {"status": "ok"}
+
+
+# --- Serve the built frontend (production only) -----------------------
+#
+# Populated by the root Dockerfile's frontend build stage, which copies
+# frontend/dist here (see DEPLOYMENT.md). Absent in local dev - the Vite
+# dev server serves the frontend there instead (see README "Running
+# locally") - so this whole block is a no-op unless the directory exists,
+# never a startup requirement.
+FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "static" / "dist"
+
+if FRONTEND_DIST_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_DIR / "assets"), name="frontend-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_frontend(full_path: str):
+        """SPA fallback: any path that isn't an API route or a real static
+        file resolves to index.html, so client-side routing (even though
+        the frontend doesn't use any today - cheap to support now, awkward
+        to retrofit later) works on a hard refresh/direct link too. Every
+        /api/* route is registered above and already took precedence for
+        anything it matches; an /api/* path that reaches here at all is
+        genuinely unmatched and must 404, never silently fall back to the
+        frontend shell."""
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = FRONTEND_DIST_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")

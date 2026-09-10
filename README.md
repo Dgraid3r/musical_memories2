@@ -32,6 +32,10 @@ workspace.
 - **Backend** — Python, FastAPI, SQLAlchemy (Postgres), Alembic migrations, Spotipy, JWT auth (PyJWT + bcrypt)
 - **Frontend** — React + TypeScript (Vite)
 
+Everything below is for running the app **locally**. To put it on the
+real internet, see **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full
+step-by-step guide (Railway hosting + Cloudflare R2 storage).
+
 ## Database (Postgres)
 
 The backend requires Postgres - there is no SQLite fallback. A
@@ -511,3 +515,12 @@ database in the same container, not the dev one):
 ```
 pytest
 ```
+
+From `frontend/`: `npm run lint` and `npm run build` (the build itself
+type-checks via `tsc -b` first).
+
+`.github/workflows/ci.yml` runs all of the above automatically on every
+push and pull request against `master` (backend migrations + tests
+against a real Postgres service container, frontend lint + build) -
+nothing extra to run by hand before opening a PR, though running them
+locally first is still the fastest way to catch a problem.
