@@ -24,6 +24,8 @@ from fastapi.testclient import TestClient
 from app.database import Base, SessionLocal, engine
 from app.email import clear_dev_outbox, last_email_to
 from app.main import app
+from app.nominatim_client import clear_search_cache as clear_places_search_cache
+from app.nominatim_client import reset_throttle as reset_places_throttle
 from app.rate_limit import limiter
 from app.spotify_client import clear_search_cache, reset_throttle
 from app.storage import get_storage
@@ -52,6 +54,23 @@ def _reset_spotify_throttle():
     # test's first search wait on the shared-client throttle for no
     # reason that test caused.
     reset_throttle()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_places_search_cache():
+    # Same reasoning as _clear_spotify_search_cache above.
+    clear_places_search_cache()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_places_throttle():
+    # Same reasoning as _reset_spotify_throttle above - Nominatim's
+    # throttle interval defaults to a full second, so leaving this unreset
+    # could make an unrelated later test's first place search wait up to a
+    # second for no reason that test caused.
+    reset_places_throttle()
     yield
 
 
