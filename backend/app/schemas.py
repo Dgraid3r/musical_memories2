@@ -1,7 +1,9 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+
+from .models import DELETED_USER_DISPLAY_NAME
 
 
 class EntryImageOut(BaseModel):
@@ -18,12 +20,25 @@ class EntryImageOut(BaseModel):
 
 class UserPublic(BaseModel):
     """Minimal, shareable user info - no email. Used anywhere one user is
-    shown to another (co-author search results, entry authorship)."""
+    shown to another (co-author search results, entry authorship).
+
+    A deleted account's real username never leaves the server via this
+    schema - display_username is masked to DELETED_USER_DISPLAY_NAME
+    before the normal from_attributes field mapping runs, the same
+    outcome JournalEntry.owner_username/Comment.author_username already
+    give for those two properties directly."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     username: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _mask_deleted_username(cls, data: Any) -> Any:
+        if getattr(data, "is_deleted", False):
+            return {"id": data.id, "username": DELETED_USER_DISPLAY_NAME}
+        return data
 
 
 class TagOut(BaseModel):
@@ -252,3 +267,16 @@ class PasswordResetRequestOut(BaseModel):
 
 class PasswordResetConfirmInput(BaseModel):
     new_password: str = Field(min_length=8, max_length=256)
+
+
+class AccountDeleteInput(BaseModel):
+    """Requires the caller's current password even though they're already
+    authenticated - re-proves it's really them before an irreversible
+    action, the same reasoning a password change would use if this app
+    had one."""
+
+    password: str
+
+
+class AccountDeleteOut(BaseModel):
+    detail: str
