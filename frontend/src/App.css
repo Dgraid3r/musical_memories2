@@ -693,6 +693,30 @@ body {
   margin-bottom: 16px;
 }
 
+.public-workspace-sort {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.sort-toggle-active {
+  background: #1db954;
+  color: #0d0d0d;
+  border: none;
+  border-radius: 16px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.public-workspace-sort .link-btn {
+  border: 1px solid #3a3a3a;
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 0.85rem;
+}
+
 .public-workspace-list {
   list-style: none;
   margin: 0;
@@ -705,6 +729,9 @@ body {
 .public-workspace-list button {
   width: 100%;
   text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   background: #1e1e1e;
   border: 1px solid #3a3a3a;
   border-radius: 10px;
@@ -717,6 +744,15 @@ body {
 
 .public-workspace-list button:hover {
   background: #2a2a2a;
+}
+
+.public-workspace-name {
+  font-weight: 600;
+}
+
+.public-workspace-meta {
+  font-size: 0.78rem;
+  color: #9a9a9a;
 }
 
 .subscriber-notice {

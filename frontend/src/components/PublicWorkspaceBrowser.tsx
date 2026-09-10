@@ -1,29 +1,63 @@
 import { useEffect, useState } from 'react'
 import { fetchEntries, fetchPublicWorkspaces } from '../api'
-import type { JournalEntry, PublicWorkspace } from '../types'
+import type { JournalEntry, PublicWorkspace, PublicWorkspaceSort } from '../types'
 import EntryCard from './EntryCard'
 
 interface Props {
   onClose: () => void
 }
 
+const PAGE_SIZE = 20
+
+function formatLastActive(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
 /** Fully read-only, requires no login at all - browsing and reading a
  * public workspace's entries works with no auth token anywhere in here. */
 export default function PublicWorkspaceBrowser({ onClose }: Props) {
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<PublicWorkspaceSort>('active')
   const [workspaces, setWorkspaces] = useState<PublicWorkspace[]>([])
   const [listLoading, setListLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [selected, setSelected] = useState<PublicWorkspace | null>(null)
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [entriesLoading, setEntriesLoading] = useState(false)
 
+  // A new search or sort choice starts over from the first page.
   useEffect(() => {
     setListLoading(true)
-    fetchPublicWorkspaces(query.trim() || undefined)
-      .then(setWorkspaces)
-      .catch(() => setWorkspaces([]))
+    fetchPublicWorkspaces({ q: query.trim() || undefined, sort, limit: PAGE_SIZE, offset: 0 })
+      .then((page) => {
+        setWorkspaces(page)
+        setHasMore(page.length === PAGE_SIZE)
+      })
+      .catch(() => {
+        setWorkspaces([])
+        setHasMore(false)
+      })
       .finally(() => setListLoading(false))
-  }, [query])
+  }, [query, sort])
+
+  async function loadMore() {
+    setLoadingMore(true)
+    try {
+      const page = await fetchPublicWorkspaces({
+        q: query.trim() || undefined,
+        sort,
+        limit: PAGE_SIZE,
+        offset: workspaces.length,
+      })
+      setWorkspaces((prev) => [...prev, ...page])
+      setHasMore(page.length === PAGE_SIZE)
+    } catch {
+      setHasMore(false)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   useEffect(() => {
     if (!selected) return
@@ -57,6 +91,23 @@ export default function PublicWorkspaceBrowser({ onClose }: Props) {
             />
           </div>
 
+          <div className="public-workspace-sort" role="group" aria-label="Sort public journals">
+            <button
+              type="button"
+              className={sort === 'active' ? 'sort-toggle-active' : 'link-btn'}
+              onClick={() => setSort('active')}
+            >
+              Recently active
+            </button>
+            <button
+              type="button"
+              className={sort === 'name' ? 'sort-toggle-active' : 'link-btn'}
+              onClick={() => setSort('name')}
+            >
+              Name
+            </button>
+          </div>
+
           {listLoading && <p>Loading...</p>}
           {!listLoading && workspaces.length === 0 && <p className="hint">No public journals found.</p>}
 
@@ -64,11 +115,21 @@ export default function PublicWorkspaceBrowser({ onClose }: Props) {
             {workspaces.map((w) => (
               <li key={w.id}>
                 <button type="button" onClick={() => setSelected(w)}>
-                  {w.name}
+                  <span className="public-workspace-name">{w.name}</span>
+                  <span className="public-workspace-meta">
+                    {w.entry_count} {w.entry_count === 1 ? 'memory' : 'memories'} &middot; active{' '}
+                    {formatLastActive(w.last_active_at)}
+                  </span>
                 </button>
               </li>
             ))}
           </ul>
+
+          {!listLoading && hasMore && (
+            <button type="button" className="link-btn" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? 'Loading...' : 'Load more'}
+            </button>
+          )}
         </main>
       )}
 

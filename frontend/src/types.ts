@@ -89,13 +89,19 @@ export interface WorkspaceMember {
   role: WorkspaceRole
 }
 
+export type PublicWorkspaceSort = 'active' | 'name'
+
 // A public workspace as returned by the discovery endpoint - deliberately
 // just enough to identify/browse to it, never entry content and never a
-// caller-specific role (browsing needs no auth at all).
+// caller-specific role (browsing needs no auth at all). entry_count and
+// last_active_at are aggregates only (how much/how recent) - never
+// anything about what's actually in an entry.
 export interface PublicWorkspace {
   id: number
   name: string
   created_at: string
+  entry_count: number
+  last_active_at: string
 }
 
 export interface WorkspaceInvite {
