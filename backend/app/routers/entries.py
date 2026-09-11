@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import Select, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, get_current_user_optional
@@ -162,20 +163,44 @@ def _resolve_tags(names: list[str], db: Session, workspace_id: int) -> list[Tag]
     valid, and typing one for the first time defines it - scoped to this
     workspace, so two different workspaces can each have their own tag with
     the same name. Names are normalized (trimmed, lowercased) so
-    casing/whitespace variants collapse onto the same tag."""
+    casing/whitespace variants collapse onto the same tag.
+
+    The "not found, so create it" check below is inherently racy: two
+    concurrent entry-creations in the same workspace introducing the same
+    brand-new tag name for the first time can both pass it before either
+    commits. Each new tag is inserted inside its own SAVEPOINT (db.
+    begin_nested(), not the whole transaction) so a uq_tag_workspace_name
+    conflict here only unwinds that one insert - never the caller's other
+    already-flushed-but-uncommitted changes in the same outer transaction
+    (e.g. update_entry may have already changed entry.text earlier in the
+    same request). On conflict, this re-fetches the tag the other
+    concurrent request just committed and uses that instead - the race
+    resolves silently, it never surfaces as an error to the caller."""
     normalized = {n.strip().lower() for n in names if n.strip()}
     if not normalized:
         return []
     existing = db.scalars(
         select(Tag).where(Tag.workspace_id == workspace_id, Tag.name.in_(normalized))
     ).all()
+    resolved: list[Tag] = list(existing)
     existing_names = {t.name for t in existing}
-    new_tags = [Tag(name=name, workspace_id=workspace_id) for name in normalized if name not in existing_names]
-    for tag in new_tags:
-        db.add(tag)
-    if new_tags:
-        db.flush()
-    return list(existing) + new_tags
+
+    for name in normalized - existing_names:
+        tag = Tag(name=name, workspace_id=workspace_id)
+        try:
+            with db.begin_nested():
+                db.add(tag)
+                db.flush()
+        except IntegrityError:
+            tag = db.scalar(select(Tag).where(Tag.workspace_id == workspace_id, Tag.name == name))
+            # Only ever expected to be None if the constraint fired for
+            # some other reason - never silently drop a tag the caller
+            # asked for.
+            if tag is None:
+                raise
+        resolved.append(tag)
+
+    return resolved
 
 
 def _save_images(images: list[UploadFile], entry_id: int, db: Session) -> list[EntryImage]:
