@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ApiError, searchPlaces } from '../api'
+import { ApiError, reverseGeocode, searchPlaces } from '../api'
 import type { EntryLocation, PlaceResult } from '../types'
 
 interface Props {
@@ -41,7 +41,7 @@ export default function LocationPicker({ value, onChange }: Props) {
     setResults([])
   }
 
-  function useCurrentLocation() {
+  async function useCurrentLocation() {
     if (!navigator.geolocation) {
       setError('Your browser does not support location services.')
       return
@@ -49,13 +49,20 @@ export default function LocationPicker({ value, onChange }: Props) {
     setLocating(true)
     setError(null)
     navigator.geolocation.getCurrentPosition(
-      (position) => {
+      async (position) => {
         const { latitude, longitude } = position.coords
-        onChange({
-          latitude,
-          longitude,
-          location_name: `Current location (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`,
-        })
+        // Reverse geocoding is a nice-to-have label, not something that
+        // should ever block saving a location - any failure here (the
+        // service unavailable, no place found, etc.) just falls back to
+        // the plain coordinate label rather than surfacing an error.
+        let locationName = `Current location (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`
+        try {
+          const place = await reverseGeocode(latitude, longitude)
+          if (place.display_name) locationName = place.display_name
+        } catch {
+          // fall through to the coordinate label already set above
+        }
+        onChange({ latitude, longitude, location_name: locationName })
         setLocating(false)
       },
       () => {

@@ -289,6 +289,17 @@ export async function searchPlaces(query: string): Promise<PlaceResult[]> {
   return res.json()
 }
 
+/** Turns raw coordinates (from the browser's geolocation API) into a
+ * human-readable place name, for "use my current location" - see
+ * LocationPicker.tsx, which treats a failure here as non-fatal and falls
+ * back to a coordinate-based label rather than blocking location picking
+ * entirely. No auth required, same bar as searchPlaces. */
+export async function reverseGeocode(latitude: number, longitude: number): Promise<{ display_name: string }> {
+  const res = await fetch(`/api/places/reverse?lat=${latitude}&lon=${longitude}`)
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Reverse geocoding failed'))
+  return res.json()
+}
+
 // --- Entries (workspace-scoped) -----------------------------------------
 
 export interface EntrySearchParams {
