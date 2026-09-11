@@ -17,6 +17,9 @@ os.environ["TOKEN_ENCRYPTION_KEY"] = "zdoZ_SoNNaBLvqnw_2jnivraHmB-SkxHdJXsLK0Lyr
 os.environ.setdefault("SPOTIFY_CLIENT_ID", "test-client-id")
 os.environ.setdefault("SPOTIFY_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("SPOTIFY_REDIRECT_URI", "http://localhost:8000/api/spotify/callback")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
+os.environ.setdefault("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback")
 
 import pytest
 from fastapi.testclient import TestClient
