@@ -3,6 +3,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
@@ -85,7 +86,22 @@ def accept_invite(
     membership = WorkspaceMembership(workspace_id=invite.workspace_id, user_id=current_user.id, role=invite.role)
     db.add(membership)
     invite.accepted_at = datetime.utcnow()
-    db.commit()
+    # This existence check above is inherently racy under real concurrency
+    # (two near-simultaneous accepts of the same invite by the same user -
+    # e.g. a double-click, or two tabs) - both could pass it before either
+    # commits. Rather than trying to close that window with a lock, let the
+    # database's own uq_workspace_membership constraint be the actual race
+    # arbiter and catch the resulting IntegrityError here, the same
+    # pattern users.py's register() already uses for username/email
+    # uniqueness - not a new one invented for this endpoint.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.info(
+            "workspace.invite_accept_race workspace_id=%s user_id=%s", invite.workspace_id, current_user.id
+        )
+        raise HTTPException(status_code=409, detail="You're already a member of this workspace")
     logger.info(
         "workspace.invite_accepted workspace_id=%s user_id=%s role=%s", invite.workspace_id, current_user.id, invite.role
     )
