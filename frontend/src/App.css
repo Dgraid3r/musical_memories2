@@ -634,6 +634,150 @@ body {
   cursor: pointer;
 }
 
+/* --- Location picker (entry creation/edit) ------------------------------ */
+
+.location-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.location-picker-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.location-picker-controls input {
+  flex: 1;
+  min-width: 160px;
+}
+
+.location-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+}
+
+.location-results button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: #f2f2f2;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.location-results button:hover {
+  background: #2a2a2a;
+}
+
+.selected-location {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #2a2a2a;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+}
+
+.entry-location-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.85rem;
+  color: #b3b3b3;
+}
+
+.entry-location-name {
+  color: #f2f2f2;
+}
+
+.location-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #2a2a2a;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.location-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.location-edit-actions button[type='button']:not(.link-btn) {
+  background: #1db954;
+  color: #000;
+  border: none;
+  border-radius: 16px;
+  padding: 4px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* --- Map view ------------------------------------------------------------ */
+
+.map-view-container {
+  height: 70vh;
+  min-height: 320px;
+  border-radius: 12px;
+  z-index: 0;
+}
+
+.map-marker-pin {
+  width: 18px;
+  height: 18px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: #1db954;
+  border: 2px solid #0d0d0d;
+}
+
+.map-marker-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid #1db954;
+  object-fit: cover;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+.map-popup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.map-popup-date {
+  font-size: 0.78rem;
+  color: #6a6a6a;
+}
+
+.map-popup button {
+  align-self: flex-start;
+  margin-top: 4px;
+  background: #1db954;
+  color: #000;
+  border: none;
+  border-radius: 16px;
+  padding: 4px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .search-bar {
   margin-bottom: 20px;
 }

@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     DDL,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -224,6 +225,17 @@ class JournalEntry(Base):
     playlist_name: Mapped[str] = mapped_column(String, nullable=False)
     playlist_url: Mapped[str] = mapped_column(String, nullable=False)
     playlist_image_url: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Optional, user-provided location - never inferred or captured
+    # automatically (see routers/places.py's backend-proxied Nominatim
+    # search, and the frontend's explicit "use my current location"
+    # button, which only triggers the browser's geolocation prompt on a
+    # click). The API treats all three as set-or-cleared together (see
+    # schemas.EntryLocationInput), though the columns themselves are
+    # independently nullable at the DB level.
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    location_name: Mapped[str | None] = mapped_column(String, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

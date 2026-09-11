@@ -29,6 +29,30 @@ export interface JournalEntry {
   created_at: string
   images: EntryImage[]
   tags: Tag[]
+  // All three null together (no location set) or all three set together -
+  // never a partial location. Never inferred/captured automatically - see
+  // LocationPicker.tsx.
+  latitude: number | null
+  longitude: number | null
+  location_name: string | null
+}
+
+// A location as picked from place search or "use my current location" -
+// the shape LocationPicker.tsx produces and PATCH .../entries/{id} (and
+// the create form) send. Distinct from EntryImage etc. above in that this
+// isn't itself a server response type - see PlaceResult below for that.
+export interface EntryLocation {
+  latitude: number
+  longitude: number
+  location_name: string
+}
+
+// What GET /api/places/search returns - never Nominatim's full raw
+// response, just enough to plot a pin and label it.
+export interface PlaceResult {
+  display_name: string
+  latitude: number
+  longitude: number
 }
 
 export interface PlaylistResult {

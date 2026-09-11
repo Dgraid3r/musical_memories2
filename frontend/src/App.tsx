@@ -6,6 +6,7 @@ import AuthForm from './components/AuthForm'
 import EntryCard from './components/EntryCard'
 import ForgotPasswordPage from './components/ForgotPasswordPage'
 import InviteAcceptPrompt from './components/InviteAcceptPrompt'
+import MapView from './components/MapView'
 import NewEntryForm from './components/NewEntryForm'
 import PublicWorkspaceBrowser from './components/PublicWorkspaceBrowser'
 import ResetPasswordPage from './components/ResetPasswordPage'
@@ -72,6 +73,12 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [showAccountSettings, setShowAccountSettings] = useState(false)
   const [showForgotPassword, setShowForgotPassword] = useState(false)
+  const [showMapView, setShowMapView] = useState(false)
+  // Set when a map pin's "View this memory" is clicked - closes the map
+  // and scrolls that entry's card into view once the (already-loaded)
+  // list is showing again. Cleared right after scrolling so it doesn't
+  // re-trigger on an unrelated re-render.
+  const [scrollToEntryId, setScrollToEntryId] = useState<number | null>(null)
   const spotifyNotice = useSpotifyCallbackNotice()
 
   // --- Workspace invite accept flow (?invite=TOKEN) ------------------
@@ -131,6 +138,24 @@ export default function App() {
       .catch(() => setError('Could not load memories.'))
       .finally(() => setLoading(false))
   }, [token, authLoading, activeWorkspace, searchQuery])
+
+  // Runs after the map closes and the (unfiltered, already-loaded) list is
+  // showing again - the target entry is almost certainly already in
+  // `entries`, but if it isn't yet rendered this simply no-ops rather than
+  // erroring, and the id stays pending harmlessly until it is.
+  useEffect(() => {
+    if (scrollToEntryId === null || showMapView) return
+    const el = document.getElementById(`entry-${scrollToEntryId}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setScrollToEntryId(null)
+    }
+  }, [scrollToEntryId, showMapView, entries])
+
+  function handleViewEntryFromMap(entryId: number) {
+    setShowMapView(false)
+    setScrollToEntryId(entryId)
+  }
 
   async function handleDelete(id: number) {
     if (!token || !activeWorkspace) return
@@ -218,6 +243,11 @@ export default function App() {
               Settings
             </button>
           )}
+          {activeWorkspace && (
+            <button type="button" className="link-btn" onClick={() => setShowMapView((v) => !v)}>
+              {showMapView ? 'List view' : 'Map view'}
+            </button>
+          )}
           <button type="button" className="link-btn" onClick={() => setShowPublicBrowser(true)}>
             Browse public
           </button>
@@ -250,7 +280,11 @@ export default function App() {
           </p>
         )}
 
-        {activeWorkspace && (
+        {activeWorkspace && showMapView && (
+          <MapView workspaceId={activeWorkspace.id} onViewEntry={handleViewEntryFromMap} />
+        )}
+
+        {activeWorkspace && !showMapView && (
           <>
             {canWrite && (
               <NewEntryForm

@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { ApiError, createEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
-import type { JournalEntry, PlaylistResult } from '../types'
+import type { EntryLocation, JournalEntry, PlaylistResult } from '../types'
 import CoAuthorPicker from './CoAuthorPicker'
+import LocationPicker from './LocationPicker'
 import PlaylistSearch from './PlaylistSearch'
 import TagInput from './TagInput'
 
@@ -24,6 +25,7 @@ export default function NewEntryForm({ workspaceId, onCreated }: Props) {
   const [isPublic, setIsPublic] = useState(false)
   const [coauthorUsernames, setCoauthorUsernames] = useState<string[]>([])
   const [tags, setTags] = useState<string[]>([])
+  const [location, setLocation] = useState<EntryLocation | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -44,7 +46,7 @@ export default function NewEntryForm({ workspaceId, onCreated }: Props) {
     try {
       const entry = await createEntry(
         workspaceId,
-        { startDate, endDate: effectiveEndDate, text, playlist, images, isPublic, coauthorUsernames, tags },
+        { startDate, endDate: effectiveEndDate, text, playlist, images, isPublic, coauthorUsernames, tags, location },
         token,
       )
       onCreated(entry)
@@ -54,6 +56,7 @@ export default function NewEntryForm({ workspaceId, onCreated }: Props) {
       setIsPublic(false)
       setCoauthorUsernames([])
       setTags([])
+      setLocation(null)
       setStartDate(today())
       setEndDate(today())
       setSpansMultipleDays(false)
@@ -113,6 +116,8 @@ export default function NewEntryForm({ workspaceId, onCreated }: Props) {
       <CoAuthorPicker workspaceId={workspaceId} selected={coauthorUsernames} onChange={setCoauthorUsernames} />
 
       <TagInput workspaceId={workspaceId} selected={tags} onChange={setTags} />
+
+      <LocationPicker value={location} onChange={setLocation} />
 
       <label htmlFor="entry-images">Photos</label>
       <input
