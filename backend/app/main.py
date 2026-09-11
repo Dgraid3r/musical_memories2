@@ -90,22 +90,62 @@ def health(db: Session = Depends(get_db)):
 # never a startup requirement.
 FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "static" / "dist"
 
+def _resolve_within_dist(full_path: str) -> Path | None:
+    """Resolves full_path against FRONTEND_DIST_DIR and returns it only if
+    the result is genuinely contained within that directory - the same
+    containment guarantee Starlette's own StaticFiles already provides for
+    the /assets mount above, which this hand-rolled catch-all route was
+    missing.
+
+    full_path arrives here already percent-decoded by Starlette/uvicorn's
+    own routing, so a request for /%2e%2e/%2e%2e/proc/self/environ (or the
+    unencoded /../../proc/self/environ) reaches this function as a
+    perfectly ordinary-looking "../../proc/self/environ" - it must never
+    be trusted as safe just because the string itself looks like a
+    relative path. Checking containment on the *resolved* candidate
+    (rather than trying to sanitize the input string) is what actually
+    closes this: it doesn't matter how ../ segments, an accidental
+    absolute-path override, or a symlink inside dist/ pointing outside it
+    got the candidate to where it is - if the resolved path isn't
+    actually inside the resolved root, this returns None.
+
+    Returns None for anything outside the directory or that doesn't exist
+    as a file - the caller (serve_frontend) treats that identically to
+    the ordinary "not a real static file" case and falls through to
+    index.html either way, so a traversal attempt looks exactly like any
+    other unmatched SPA route to whoever's probing it, never a distinct
+    error."""
+    dist_root = FRONTEND_DIST_DIR.resolve()
+    candidate = (FRONTEND_DIST_DIR / full_path).resolve()
+    if candidate.is_relative_to(dist_root) and candidate.is_file():
+        return candidate
+    return None
+
+
+def serve_frontend(full_path: str):
+    """SPA fallback: any path that isn't an API route or a real static
+    file resolves to index.html, so client-side routing (even though
+    the frontend doesn't use any today - cheap to support now, awkward
+    to retrofit later) works on a hard refresh/direct link too. Every
+    /api/* route is registered above and already took precedence for
+    anything it matches; an /api/* path that reaches here at all is
+    genuinely unmatched and must 404, never silently fall back to the
+    frontend shell.
+
+    Defined unconditionally (route *registration* below stays
+    conditional on FRONTEND_DIST_DIR actually existing, exactly as
+    before) purely so this - the security-relevant handler - stays
+    directly importable and testable in dev/test, where that directory
+    never exists."""
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    if full_path:
+        candidate = _resolve_within_dist(full_path)
+        if candidate is not None:
+            return FileResponse(candidate)
+    return FileResponse(FRONTEND_DIST_DIR / "index.html")
+
+
 if FRONTEND_DIST_DIR.is_dir():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST_DIR / "assets"), name="frontend-assets")
-
-    @app.get("/{full_path:path}", include_in_schema=False)
-    def serve_frontend(full_path: str):
-        """SPA fallback: any path that isn't an API route or a real static
-        file resolves to index.html, so client-side routing (even though
-        the frontend doesn't use any today - cheap to support now, awkward
-        to retrofit later) works on a hard refresh/direct link too. Every
-        /api/* route is registered above and already took precedence for
-        anything it matches; an /api/* path that reaches here at all is
-        genuinely unmatched and must 404, never silently fall back to the
-        frontend shell."""
-        if full_path.startswith("api/"):
-            raise HTTPException(status_code=404, detail="Not Found")
-        candidate = FRONTEND_DIST_DIR / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(FRONTEND_DIST_DIR / "index.html")
+    app.get("/{full_path:path}", include_in_schema=False)(serve_frontend)
