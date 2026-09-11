@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -111,6 +112,36 @@ def verify_oauth_state(state: str) -> int | None:
         return int(user_id)
     except (TypeError, ValueError):
         return None
+
+
+def create_signin_state() -> str:
+    """A short-lived, signed nonce protecting the Google sign-in redirect
+    round-trip against CSRF - see routers/google_auth.py. Unlike
+    create_oauth_state above, there is no already-authenticated local
+    user to carry an identity for: Google sign-in may be creating a
+    brand-new account, or the browser may have no session at all when the
+    flow starts. So this only proves "this callback is answering a
+    request this server itself issued a moment ago" (via the same
+    signed/expiring/purpose-tagged JWT mechanism as create_oauth_state,
+    not a hand-rolled scheme), never who the caller is - the callback
+    identifies the user entirely from Google's verified ID token instead."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=OAUTH_STATE_EXPIRE_MINUTES)
+    payload = {"purpose": "google_signin", "nonce": secrets.token_urlsafe(16), "exp": expire}
+    return jwt.encode(payload, _secret_key(), algorithm=ALGORITHM)
+
+
+def verify_signin_state(state: str) -> bool:
+    """True if `state` is a still-valid, untampered token from
+    create_signin_state - False for missing/expired/tampered/wrong-purpose
+    values (including, deliberately, some other valid JWT this server
+    issued for a different purpose, like an access token or a Spotify
+    oauth_state - the purpose tag defends against exactly that
+    cross-purpose-token confusion)."""
+    try:
+        payload = jwt.decode(state, _secret_key(), algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return False
+    return payload.get("purpose") == "google_signin"
 
 
 def get_current_user_optional(

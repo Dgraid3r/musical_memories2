@@ -42,6 +42,36 @@ function useSpotifyCallbackNotice(): string | null {
   return notice
 }
 
+/** Google sign-in's error outcomes (success delivers a token via the URL
+ * fragment instead - see auth/AuthContext.tsx - so there's no "connected"
+ * case to handle here, unlike Spotify's). */
+function useGoogleSignInNotice(): string | null {
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const googleResult = params.get('google')
+    if (!googleResult) return
+
+    if (googleResult === 'denied') {
+      setNotice('Google sign-in was not completed.')
+    } else if (googleResult === 'unavailable') {
+      setNotice('Google sign-in is temporarily unavailable, try again shortly.')
+    } else if (googleResult === 'invalid_token') {
+      setNotice("Could not verify your Google account's identity - please try again.")
+    } else if (googleResult === 'account_deleted') {
+      setNotice('That account has been deleted and can no longer be signed into.')
+    } else {
+      setNotice('Google sign-in could not be completed - please try again.')
+    }
+    params.delete('google')
+    const rest = params.toString()
+    window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''))
+  }, [])
+
+  return notice
+}
+
 /** Reads a query param exactly once on first mount and strips it from the
  * URL, the same one-shot pattern as useSpotifyCallbackNotice - used for
  * ?invite=, ?verify=, and ?reset= links landed on from an email. */
@@ -80,6 +110,7 @@ export default function App() {
   // re-trigger on an unrelated re-render.
   const [scrollToEntryId, setScrollToEntryId] = useState<number | null>(null)
   const spotifyNotice = useSpotifyCallbackNotice()
+  const googleNotice = useGoogleSignInNotice()
 
   // --- Workspace invite accept flow (?invite=TOKEN) ------------------
   const inviteTokenFromUrl = useOneShotUrlParam('invite')
@@ -206,6 +237,7 @@ export default function App() {
         )}
         {inviteError && <p className="error invite-banner">{inviteError}</p>}
         {verifyNotice && <p className="hint">{verifyNotice}</p>}
+        {googleNotice && <p className="hint">{googleNotice}</p>}
         <AuthForm
           inviteToken={invitePreview && !invitePreview.account_exists ? inviteToken ?? undefined : undefined}
           prefillEmail={invitePreview && !invitePreview.account_exists ? invitePreview.email : undefined}

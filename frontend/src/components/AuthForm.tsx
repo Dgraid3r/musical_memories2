@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ApiError } from '../api'
+import { useEffect, useState } from 'react'
+import { ApiError, fetchGoogleSignInConfig } from '../api'
 import { useAuth } from '../auth/AuthContext'
 
 interface Props {
@@ -21,6 +21,20 @@ export default function AuthForm({ inviteToken, prefillEmail, initialMode, onFor
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [googleEnabled, setGoogleEnabled] = useState(false)
+
+  useEffect(() => {
+    fetchGoogleSignInConfig()
+      .then((c) => setGoogleEnabled(c.enabled))
+      .catch(() => setGoogleEnabled(false))
+  }, [])
+
+  function handleGoogleSignIn() {
+    // A plain browser navigation, not a fetch - the backend responds
+    // with a redirect straight to Google, and eventually redirects the
+    // browser back with a fresh token (see auth/AuthContext.tsx).
+    window.location.href = '/api/auth/google/login'
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -44,6 +58,17 @@ export default function AuthForm({ inviteToken, prefillEmail, initialMode, onFor
       <form className="auth-form" onSubmit={handleSubmit}>
         <h1>Musical Memories</h1>
         <p className="hint">{mode === 'login' ? 'Log in to your journal' : 'Create an account'}</p>
+
+        {googleEnabled && (
+          <>
+            <button type="button" className="google-signin-btn" onClick={handleGoogleSignIn}>
+              Sign in with Google
+            </button>
+            <div className="auth-divider">
+              <span>or</span>
+            </div>
+          </>
+        )}
 
         <label htmlFor="auth-username">Username</label>
         <input id="auth-username" value={username} onChange={(e) => setUsername(e.target.value)} required />

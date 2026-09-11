@@ -215,6 +215,16 @@ class SpotifyStatusOut(BaseModel):
     connected: bool
 
 
+class GoogleSignInConfigOut(BaseModel):
+    """Whether "Sign in with Google" is available at all - opt-in like
+    every other external integration in this app (Spotify, Sentry, SMTP,
+    object storage). No auth required to check this - it has to be
+    readable before anyone can be logged in, unlike SpotifyStatusOut
+    above, which is about an already-authenticated user's own account."""
+
+    enabled: bool
+
+
 class SpotifyConnectOut(BaseModel):
     authorize_url: str
 

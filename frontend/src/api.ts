@@ -516,3 +516,17 @@ export async function fetchMyPlaylists(token: string): Promise<PlaylistResult[]>
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load your playlists'))
   return res.json()
 }
+
+// --- Google sign-in --------------------------------------------------------
+
+/** Whether "Sign in with Google" is available at all - opt-in like every
+ * other external integration in this app. No auth required (this runs
+ * before anyone can be logged in) - AuthForm.tsx uses it to decide
+ * whether to show the button at all. Starting the flow itself is a plain
+ * browser navigation to GET /api/auth/google/login, not a fetch - see
+ * AuthForm.tsx. */
+export async function fetchGoogleSignInConfig(): Promise<{ enabled: boolean }> {
+  const res = await fetch('/api/auth/google/config')
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load sign-in options'))
+  return res.json()
+}
