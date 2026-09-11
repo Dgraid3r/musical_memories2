@@ -1,4 +1,6 @@
 import type {
+  AdminStats,
+  AdminUser,
   Comment,
   EntryEditEvent,
   EntryLocation,
@@ -528,5 +530,46 @@ export async function fetchMyPlaylists(token: string): Promise<PlaylistResult[]>
 export async function fetchGoogleSignInConfig(): Promise<{ enabled: boolean }> {
   const res = await fetch('/api/auth/google/config')
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load sign-in options'))
+  return res.json()
+}
+
+// --- Admin dashboard (admin-only; see AuthContext's user.is_admin) --------
+
+export interface AdminUserSearchParams {
+  q?: string
+  limit?: number
+  offset?: number
+}
+
+export async function fetchAdminUsers(params: AdminUserSearchParams, token: string): Promise<AdminUser[]> {
+  const query = new URLSearchParams()
+  if (params.q) query.set('q', params.q)
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  if (params.offset !== undefined) query.set('offset', String(params.offset))
+  const qs = query.toString()
+  const res = await fetch(`/api/admin/users${qs ? `?${qs}` : ''}`, { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load users'))
+  return res.json()
+}
+
+export async function deactivateAdminUser(userId: number, token: string): Promise<void> {
+  const res = await fetch(`/api/admin/users/${userId}/deactivate`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to deactivate account'))
+}
+
+export async function reactivateAdminUser(userId: number, token: string): Promise<void> {
+  const res = await fetch(`/api/admin/users/${userId}/reactivate`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to reactivate account'))
+}
+
+export async function fetchAdminStats(token: string): Promise<AdminStats> {
+  const res = await fetch('/api/admin/stats', { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load stats'))
   return res.json()
 }

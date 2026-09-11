@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ApiError, confirmEmailVerification, deleteEntry, fetchEntries, previewInvite } from './api'
 import { useAuth } from './auth/AuthContext'
 import AccountSettings from './components/AccountSettings'
+import AdminDashboard from './components/AdminDashboard'
 import AuthForm from './components/AuthForm'
 import EntryCard from './components/EntryCard'
 import ForgotPasswordPage from './components/ForgotPasswordPage'
@@ -61,6 +62,8 @@ function useGoogleSignInNotice(): string | null {
       setNotice("Could not verify your Google account's identity - please try again.")
     } else if (googleResult === 'account_deleted') {
       setNotice('That account has been deleted and can no longer be signed into.')
+    } else if (googleResult === 'account_deactivated') {
+      setNotice('That account has been deactivated. Contact an admin if you think this is a mistake.')
     } else {
       setNotice('Google sign-in could not be completed - please try again.')
     }
@@ -104,6 +107,7 @@ export default function App() {
   const [showAccountSettings, setShowAccountSettings] = useState(false)
   const [showForgotPassword, setShowForgotPassword] = useState(false)
   const [showMapView, setShowMapView] = useState(false)
+  const [showAdminDashboard, setShowAdminDashboard] = useState(false)
   // Set when a map pin's "View this memory" is clicked - closes the map
   // and scrolls that entry's card into view once the (already-loaded)
   // list is showing again. Cleared right after scrolling so it doesn't
@@ -253,6 +257,10 @@ export default function App() {
     )
   }
 
+  if (showAdminDashboard && user.is_admin) {
+    return <AdminDashboard onClose={() => setShowAdminDashboard(false)} />
+  }
+
   // A subscriber can read everything in the active workspace but can't
   // create entries, add photos, or comment - the entry-specific
   // owner/co-author actions inside EntryCard are already correctly hidden
@@ -283,6 +291,11 @@ export default function App() {
           <button type="button" className="link-btn" onClick={() => setShowPublicBrowser(true)}>
             Browse public
           </button>
+          {user.is_admin && (
+            <button type="button" className="link-btn" onClick={() => setShowAdminDashboard(true)}>
+              Admin
+            </button>
+          )}
           <span>{user.username}</span>
           <button type="button" className="link-btn" onClick={() => setShowAccountSettings(true)}>
             Account
