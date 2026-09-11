@@ -23,7 +23,7 @@ import requests
 
 from cachetools import TTLCache
 
-from .schemas import PlaceResult
+from .schemas import PlaceResult, ReverseGeocodeResult
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,12 @@ NOMINATIM_REQUEST_TIMEOUT_SECONDS = 5
 # local app, so an in-memory TTL cache is the right tool, not Redis. 10
 # minutes is plenty fresh for place names, which essentially never change,
 # and absorbs a user retyping/backspacing while composing a search.
+#
+# Shared by both search_places and reverse_geocode below (distinctly
+# tagged keys - ("search", query, limit) vs ("reverse", lat, lon) - so
+# there's exactly one cache, exactly one MAXSIZE budget, and exactly one
+# place to clear in tests, rather than two parallel caches that would
+# only cost more memory for no benefit; the two lookups never collide.
 SEARCH_CACHE_TTL_SECONDS = 600
 SEARCH_CACHE_MAXSIZE = 256
 
@@ -126,3 +132,58 @@ def search_places(query: str, limit: int = 5) -> list[PlaceResult]:
     logger.info("places.search cache=miss query=%r results=%d", query, len(places))
     _search_cache[cache_key] = places
     return places
+
+
+# ~11m at the equator - close enough that "use my current location"
+# clicked twice from roughly the same spot (GPS jitter, or the same user
+# a minute later) hits the cache, without rounding away meaningfully
+# different nearby addresses.
+REVERSE_GEOCODE_COORD_PRECISION = 4
+
+
+def reverse_geocode(latitude: float, longitude: float) -> ReverseGeocodeResult:
+    """Turns raw coordinates into a human-readable place name - used by
+    "use my current location" (see routers/places.py and
+    LocationPicker.tsx), which otherwise has only bare lat/lng from the
+    browser's geolocation API. Shares search_places' throttle and cache
+    above rather than a second independent one, so the two lookups
+    together still respect Nominatim's single combined rate policy."""
+    cache_key = (
+        "reverse",
+        round(latitude, REVERSE_GEOCODE_COORD_PRECISION),
+        round(longitude, REVERSE_GEOCODE_COORD_PRECISION),
+    )
+    cached = _search_cache.get(cache_key)
+    if cached is not None:
+        logger.info("places.reverse cache=hit lat=%s lon=%s", latitude, longitude)
+        return cached
+
+    _throttle()
+    try:
+        response = requests.get(
+            f"{NOMINATIM_BASE_URL}/reverse",
+            params={"lat": latitude, "lon": longitude, "format": "jsonv2"},
+            headers={"User-Agent": NOMINATIM_USER_AGENT},
+            timeout=NOMINATIM_REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        raw_result = response.json()
+    except requests.RequestException:
+        logger.exception("places.reverse lat=%s lon=%s failed", latitude, longitude)
+        raise PlacesUnavailableError("Reverse geocoding is temporarily unavailable") from None
+    except ValueError:
+        logger.exception("places.reverse lat=%s lon=%s returned unparseable response", latitude, longitude)
+        raise PlacesUnavailableError("Reverse geocoding is temporarily unavailable") from None
+
+    # Nominatim returns a 200 with {"error": "Unable to geocode"} (no
+    # display_name) for coordinates with nothing nearby - that's still a
+    # "no name available" outcome the caller should fall back on, same as
+    # any other failure here.
+    if not isinstance(raw_result, dict) or "display_name" not in raw_result:
+        logger.warning("places.reverse lat=%s lon=%s no display_name in response", latitude, longitude)
+        raise PlacesUnavailableError("No place name found for this location")
+
+    result = ReverseGeocodeResult(display_name=raw_result["display_name"])
+    logger.info("places.reverse cache=miss lat=%s lon=%s", latitude, longitude)
+    _search_cache[cache_key] = result
+    return result

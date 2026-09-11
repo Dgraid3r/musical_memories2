@@ -125,6 +125,14 @@ class PlaceResult(BaseModel):
     longitude: float
 
 
+class ReverseGeocodeResult(BaseModel):
+    """What GET /api/places/reverse returns for a set of coordinates -
+    just the place name, same "never Nominatim's raw response" rule as
+    PlaceResult above."""
+
+    display_name: str
+
+
 class PlaylistResult(BaseModel):
     id: str
     name: str
