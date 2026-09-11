@@ -4,7 +4,38 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>Musical Memories</title>
+
+    <!-- Applies a stored explicit light/dark choice before the app's own
+         CSS/JS ever runs, so a returning user's theme never flashes the
+         wrong palette for a frame on load. "system" (no stored choice,
+         or a stored value of "system") intentionally sets nothing here -
+         see App.css's @media (prefers-color-scheme: dark) block, which
+         only takes over when this attribute is absent. Keep the storage
+         key in sync with theme/ThemeContext.tsx's THEME_STORAGE_KEY. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('musical_memories_theme')
+          if (stored === 'light' || stored === 'dark') {
+            document.documentElement.setAttribute('data-theme', stored)
+          }
+        } catch (e) {
+          // localStorage unavailable (private browsing, etc.) - fall
+          // back to system preference, same as never having chosen.
+        }
+      })()
+    </script>
+
+    <!-- "Liner Notes" theme typefaces - see App.css's --font-* tokens.
+         Fraunces (display serif), Source Sans 3 (body), IBM Plex Mono
+         (small technical labels: dates, tags, timestamps). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

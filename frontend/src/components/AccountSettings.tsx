@@ -1,10 +1,17 @@
 import { useState } from 'react'
 import { ApiError, deleteAccount } from '../api'
 import { useAuth } from '../auth/AuthContext'
+import { useTheme, type ThemeChoice } from '../theme/ThemeContext'
 
 interface Props {
   onClose: () => void
 }
+
+const APPEARANCE_OPTIONS: { value: ThemeChoice; label: string }[] = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'System' },
+]
 
 /** Account-level settings (as opposed to WorkspaceSettings, which is
  * per-workspace) - currently just the permanent account deletion flow.
@@ -12,6 +19,7 @@ interface Props {
  * duplicating that layout for a second settings panel. */
 export default function AccountSettings({ onClose }: Props) {
   const { token, logout } = useAuth()
+  const { theme, setTheme } = useTheme()
   const [confirming, setConfirming] = useState(false)
   const [password, setPassword] = useState('')
   const [deleting, setDeleting] = useState(false)
@@ -44,6 +52,23 @@ export default function AccountSettings({ onClose }: Props) {
             Close
           </button>
         </header>
+
+        <h3>Appearance</h3>
+        <p className="hint">
+          "System" follows your device's light/dark setting automatically. Switching takes effect immediately.
+        </p>
+        <div className="appearance-options" role="group" aria-label="Appearance">
+          {APPEARANCE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={theme === option.value ? 'active' : ''}
+              onClick={() => setTheme(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
 
         <h3>Delete my account</h3>
         {!confirming && (
