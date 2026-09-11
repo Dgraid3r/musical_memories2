@@ -56,13 +56,17 @@ def _user_from_token(token: str, db: Session) -> User | None:
     if user_id is None:
         return None
     user = db.get(User, int(user_id))
-    if user is not None and user.is_deleted:
+    if user is not None and (user.is_deleted or not user.is_active):
         # There's no server-side session table for a stateless JWT to
         # revoke from (see sessions.py) - this is what "revoking all
-        # active sessions" on deletion actually means here: any token
-        # issued before deletion, on any device, stops authenticating
-        # immediately, rather than staying valid until it naturally
-        # expires up to ACCESS_TOKEN_EXPIRE_MINUTES later.
+        # active sessions" means here for either a permanent self-
+        # deletion or a reversible admin deactivation: any token issued
+        # before deletion/deactivation, on any device, stops
+        # authenticating immediately, rather than staying valid until it
+        # naturally expires up to ACCESS_TOKEN_EXPIRE_MINUTES later. A
+        # reactivated user's tokens work again immediately too, for the
+        # same reason - this check runs fresh on every request rather
+        # than caching anything.
         return None
     return user
 
@@ -151,3 +155,19 @@ def get_current_user_optional(
     if credentials is None:
         return None
     return _user_from_token(credentials.credentials, db)
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Site-wide admin access (see User.is_admin, routers/admin.py) -
+    entirely separate from a workspace role (owner/member/subscriber),
+    which only governs one workspace, not the platform.
+
+    403, not 404: unlike require_workspace_owner and friends (which 404
+    a private workspace a non-member can't see, to avoid disclosing it
+    exists at all), an admin endpoint isn't hiding its own existence from
+    a logged-in non-admin - it's simply refusing them, so the ordinary
+    "you're logged in but not allowed to do this" status applies."""
+    if not current_user.is_admin:
+        logger.warning("auth.admin_required user_id=%s", current_user.id)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return current_user

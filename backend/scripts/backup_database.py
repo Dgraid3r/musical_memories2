@@ -132,16 +132,43 @@ def _apply_retention(*, list_names, delete, retention_days: int, log_target: str
             logger.info("backup.retention_deleted target=%s name=%s", log_target, name)
 
 
+def _record_run(started_at: datetime, *, succeeded: bool, error_message: str | None) -> None:
+    """Writes one row to backup_runs (see app/models.py BackupRun), read
+    back by GET /api/admin/stats to show the most recent backup's
+    outcome without reading logs. Imported inline, same reasoning as
+    run()'s own inline app.storage import - this script's pure helpers
+    (backup_filename, parse_backup_timestamp, etc.) stay importable
+    without needing a configured app database at all.
+
+    Recording failure must never crash the backup script itself - it's
+    an operational nicety, not something a DB hiccup should compound
+    into "the backup script itself also failed" for."""
+    try:
+        from app.database import SessionLocal
+        from app.models import BackupRun
+
+        db = SessionLocal()
+        try:
+            db.add(BackupRun(started_at=started_at, succeeded=succeeded, error_message=error_message))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.error("backup.run_record_failed", exc_info=True)
+
+
 def run() -> int:
     from app.storage import LocalDiskStorage, S3CompatibleStorage, get_storage
 
+    started_at = datetime.now(timezone.utc)
     timestamp = _timestamp_now()
     filename = backup_filename(timestamp)
 
     try:
         data = create_dump()
-    except Exception:
+    except Exception as exc:
         logger.error("backup.dump_failed", exc_info=True)
+        _record_run(started_at, succeeded=False, error_message=str(exc))
         return 1
 
     retention_days = _retention_days()
@@ -173,13 +200,15 @@ def run() -> int:
                 retention_days=retention_days,
                 log_target="local",
             )
-    except Exception:
+    except Exception as exc:
         logger.error("backup.save_failed file=%s", filename, exc_info=True)
+        _record_run(started_at, succeeded=False, error_message=str(exc))
         return 1
 
     logger.info(
         "backup.completed file=%s bytes=%d retention_days=%d", filename, len(data), retention_days
     )
+    _record_run(started_at, succeeded=True, error_message=None)
     return 0
 
 

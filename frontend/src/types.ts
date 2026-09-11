@@ -70,6 +70,38 @@ export interface User {
   email: string
   email_verified: boolean
   created_at: string
+  // Site-wide admin flag - gates the admin dashboard nav link (see
+  // App.tsx). Separate from any workspace-level role.
+  is_admin: boolean
+}
+
+// One row of GET /api/admin/users - reuses the same "Deleted user"
+// display-name masking as everywhere else for a deleted account.
+export interface AdminUser {
+  id: number
+  username: string
+  email: string
+  created_at: string
+  email_verified: boolean
+  is_admin: boolean
+  is_active: boolean
+  is_deleted: boolean
+}
+
+export interface AdminBackupStatus {
+  started_at: string
+  succeeded: boolean
+  error_message: string | null
+}
+
+export interface AdminStats {
+  total_users: number
+  total_workspaces: number
+  total_entries: number
+  new_signups_7d: number
+  new_signups_30d: number
+  database_healthy: boolean
+  latest_backup: AdminBackupStatus | null
 }
 
 // One row of an entry's audit log (see GET .../entries/{id}/edit-history).

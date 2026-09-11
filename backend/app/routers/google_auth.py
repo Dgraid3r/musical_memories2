@@ -120,6 +120,12 @@ def callback(
     if user is not None:
         if user.is_deleted:
             return RedirectResponse(f"{frontend_url}/?google=account_deleted")
+        if not user.is_active:
+            # Same reversible admin-deactivation block sessions.py's
+            # login() and auth._user_from_token check - caught here too
+            # so this redirect never hands back a token that would just
+            # fail on the very next request anyway.
+            return RedirectResponse(f"{frontend_url}/?google=account_deactivated")
     else:
         # 2) No google_sub match - an existing *local* account with this
         #    exact (Google-verified) email gets this google_sub linked,
@@ -133,6 +139,8 @@ def callback(
                 # a real Google email in practice - defensive anyway,
                 # same as sessions.py's login() checking is_deleted.
                 return RedirectResponse(f"{frontend_url}/?google=account_deleted")
+            if not existing.is_active:
+                return RedirectResponse(f"{frontend_url}/?google=account_deactivated")
             existing.google_sub = identity.sub
             db.commit()
             logger.info("google_signin.linked_existing_account user_id=%s", existing.id)

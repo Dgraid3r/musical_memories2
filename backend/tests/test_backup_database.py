@@ -139,6 +139,113 @@ def test_run_warns_when_saving_locally_only(monkeypatch, caplog, tmp_path):
     assert any("NOT real off-machine protection" in r.message for r in warning_records)
 
 
+# --- BackupRun recording (see app/models.py BackupRun, GET /api/admin/stats) -
+
+
+def test_run_records_backup_run_row_on_success(monkeypatch, tmp_path):
+    from app.database import SessionLocal
+    from app.models import BackupRun
+    from app.storage import get_storage
+
+    get_storage.cache_clear()
+    for var in (
+        "OBJECT_STORAGE_ENDPOINT_URL",
+        "OBJECT_STORAGE_BUCKET",
+        "OBJECT_STORAGE_ACCESS_KEY",
+        "OBJECT_STORAGE_SECRET_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    with (
+        patch("scripts.backup_database.create_dump", return_value=b"fake gzip bytes"),
+        patch("scripts.backup_database.BACKUPS_DIR", tmp_path),
+    ):
+        exit_code = run()
+    get_storage.cache_clear()
+
+    assert exit_code == 0
+    db = SessionLocal()
+    try:
+        runs = db.query(BackupRun).order_by(BackupRun.id.desc()).all()
+        assert len(runs) == 1
+        assert runs[0].succeeded is True
+        assert runs[0].error_message is None
+        assert runs[0].started_at is not None
+    finally:
+        db.close()
+
+
+def test_run_records_backup_run_row_on_dump_failure():
+    from app.database import SessionLocal
+    from app.models import BackupRun
+
+    with patch("scripts.backup_database.create_dump", side_effect=RuntimeError("pg_dump exited 1: boom")):
+        exit_code = run()
+
+    assert exit_code == 1
+    db = SessionLocal()
+    try:
+        runs = db.query(BackupRun).order_by(BackupRun.id.desc()).all()
+        assert len(runs) == 1
+        assert runs[0].succeeded is False
+        assert runs[0].error_message == "pg_dump exited 1: boom"
+    finally:
+        db.close()
+
+
+def test_run_records_backup_run_row_on_save_failure(monkeypatch):
+    from app.database import SessionLocal
+    from app.models import BackupRun
+    from app.storage import get_storage
+
+    get_storage.cache_clear()
+    for var in (
+        "OBJECT_STORAGE_ENDPOINT_URL",
+        "OBJECT_STORAGE_BUCKET",
+        "OBJECT_STORAGE_ACCESS_KEY",
+        "OBJECT_STORAGE_SECRET_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    with (
+        patch("scripts.backup_database.create_dump", return_value=b"fake gzip bytes"),
+        patch("scripts.backup_database.BACKUPS_DIR") as fake_dir,
+    ):
+        fake_dir.mkdir.side_effect = OSError("disk full")
+        exit_code = run()
+    get_storage.cache_clear()
+
+    assert exit_code == 1
+    db = SessionLocal()
+    try:
+        runs = db.query(BackupRun).order_by(BackupRun.id.desc()).all()
+        assert len(runs) == 1
+        assert runs[0].succeeded is False
+        assert "disk full" in runs[0].error_message
+    finally:
+        db.close()
+
+
+def test_record_run_swallows_its_own_failure_rather_than_raising():
+    """_record_run's own internal try/except is what makes recording an
+    operational nicety rather than a hard dependency of the backup - a
+    broken app database must not be able to turn a genuinely successful
+    backup into a crash. Proven directly against _record_run (the actual
+    protection boundary) rather than through run(), which relies
+    entirely on this guarantee and has no second layer of its own."""
+    from datetime import datetime, timezone
+
+    from scripts.backup_database import _record_run
+
+    # _record_run imports SessionLocal inline (from app.database) rather
+    # than at module level - same reasoning as run()'s own inline
+    # app.storage import, see _record_run's docstring - so the patch
+    # target is app.database.SessionLocal, not a name on this module.
+    with patch("app.database.SessionLocal", side_effect=RuntimeError("db is down")):
+        # Must not raise.
+        _record_run(datetime.now(timezone.utc), succeeded=True, error_message=None)
+
+
 # --- Retention: same policy locally and in object storage -------------------
 
 

@@ -8,16 +8,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from .database import get_db  # noqa: E402
+from .database import check_database_health, get_db  # noqa: E402
 from .logging_config import configure_logging  # noqa: E402  (must load after .env)
 from .rate_limit import limiter  # noqa: E402
 from .sentry_config import configure_sentry  # noqa: E402
-from .routers import account, comments, entries, google_auth, invites, places, sessions, spotify, users, workspaces  # noqa: E402
+from .routers import account, admin, comments, entries, google_auth, invites, places, sessions, spotify, users, workspaces  # noqa: E402
 
 configure_logging()
 configure_sentry()
@@ -65,6 +64,7 @@ app.include_router(comments.router)
 app.include_router(spotify.router)
 app.include_router(places.router)
 app.include_router(google_auth.router)
+app.include_router(admin.router)
 
 
 @app.get("/api/health")
@@ -73,11 +73,10 @@ def health(db: Session = Depends(get_db)):
     ok - a dead/unreachable DB is exactly the condition an external
     uptime monitor (see README "Monitoring") needs to catch, and this is
     what it should be pointed at once the app is deployed somewhere
-    reachable from the internet."""
-    try:
-        db.execute(text("SELECT 1"))
-    except Exception:
-        logger.error("health.database_unreachable", exc_info=True)
+    reachable from the internet. Shares its check with GET
+    /api/admin/stats (see database.check_database_health) rather than
+    each defining its own."""
+    if not check_database_health(db):
         return JSONResponse(status_code=503, content={"status": "unhealthy", "detail": "database unreachable"})
     return {"status": "ok"}
 

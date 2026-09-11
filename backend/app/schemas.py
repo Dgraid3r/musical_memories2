@@ -165,6 +165,12 @@ class UserOut(BaseModel):
     email: str
     email_verified: bool
     created_at: datetime
+    # Exposed here (unlike is_active, which a logged-in caller never
+    # needs to see about themselves) so the frontend can gate the admin
+    # dashboard nav link off the current user's own attributes, the same
+    # AuthContext-driven pattern used everywhere else in the frontend -
+    # see AuthContext.tsx/App.tsx.
+    is_admin: bool
 
 
 class LoginInput(BaseModel):
@@ -352,3 +358,73 @@ class AccountDeleteInput(BaseModel):
 
 class AccountDeleteOut(BaseModel):
     detail: str
+
+
+# --- Admin ------------------------------------------------------------------
+
+
+class AdminUserOut(BaseModel):
+    """One row of GET /api/admin/users. Reuses the exact same deleted-
+    account username masking as UserPublic/owner_username/author_username
+    above - a deleted account's real username never leaves the server
+    here either. Its email is already the synthetic
+    deleted-user-{id}@deleted.invalid placeholder from self-deletion's
+    own PII scrub (see account.py) by the time this runs, so no separate
+    email masking is needed on top of that."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    email: str
+    created_at: datetime
+    email_verified: bool
+    is_admin: bool
+    is_active: bool
+    is_deleted: bool
+
+    @model_validator(mode="before")
+    @classmethod
+    def _mask_deleted_username(cls, data: Any) -> Any:
+        if getattr(data, "is_deleted", False):
+            return {
+                "id": data.id,
+                "username": DELETED_USER_DISPLAY_NAME,
+                "email": data.email,
+                "created_at": data.created_at,
+                "email_verified": data.email_verified,
+                "is_admin": data.is_admin,
+                "is_active": data.is_active,
+                "is_deleted": True,
+            }
+        return data
+
+
+class AdminUserActionOut(BaseModel):
+    detail: str
+
+
+class BackupStatusOut(BaseModel):
+    """The most recent scripts/backup_database.py run - see models.
+    BackupRun. None of this is shown anywhere but the admin stats panel."""
+
+    started_at: datetime
+    succeeded: bool
+    error_message: str | None
+
+
+class AdminStatsOut(BaseModel):
+    """GET /api/admin/stats - operational visibility only, deliberately
+    no content (no entry text, no workspace names) - see routers/admin.py
+    module docstring for the explicit "not content moderation" scope
+    boundary this whole router stays inside."""
+
+    total_users: int
+    total_workspaces: int
+    total_entries: int
+    new_signups_7d: int
+    new_signups_30d: int
+    database_healthy: bool
+    # None means no backup has ever run yet (e.g. a brand new
+    # deployment) - distinct from a run that happened and failed.
+    latest_backup: BackupStatusOut | None

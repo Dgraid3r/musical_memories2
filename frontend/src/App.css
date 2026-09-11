@@ -941,6 +941,108 @@ body {
   padding: 14px 16px;
 }
 
+/* --- Admin dashboard ------------------------------------------------- */
+
+.admin-stats,
+.admin-users {
+  background: #1e1e1e;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.admin-stats h2,
+.admin-users h2 {
+  margin-top: 0;
+}
+
+.admin-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.admin-stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: #2a2a2a;
+  border-radius: 10px;
+  padding: 14px 8px;
+}
+
+.admin-stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.admin-stat-label {
+  font-size: 0.75rem;
+  color: #b3b3b3;
+  text-align: center;
+}
+
+.admin-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-status-badge {
+  font-size: 0.78rem;
+  border-radius: 16px;
+  padding: 4px 12px;
+  background: #2a2a2a;
+  color: #b3b3b3;
+}
+
+.admin-status-badge.ok {
+  background: rgba(29, 185, 84, 0.15);
+  color: #1db954;
+}
+
+.admin-status-badge.bad {
+  background: rgba(220, 60, 60, 0.15);
+  color: #e05c5c;
+}
+
+.admin-user-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-user-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #2a2a2a;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.admin-user-list li.admin-user-deleted {
+  opacity: 0.6;
+}
+
+.admin-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-user-email,
+.admin-user-meta {
+  font-size: 0.78rem;
+  color: #b3b3b3;
+}
+
 .verify-email-banner {
   background: #1e1e1e;
   border-radius: 12px;

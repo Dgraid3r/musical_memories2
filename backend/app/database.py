@@ -1,7 +1,10 @@
+import logging
 import os
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_database_url(url: str) -> str:
@@ -41,3 +44,16 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def check_database_health(db: Session) -> bool:
+    """True if a trivial query against the database succeeds - the single
+    place "is the database reachable" is defined, shared by GET
+    /api/health (app/main.py) and GET /api/admin/stats
+    (routers/admin.py) rather than each running its own duplicate check."""
+    try:
+        db.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        logger.error("health.database_unreachable", exc_info=True)
+        return False
