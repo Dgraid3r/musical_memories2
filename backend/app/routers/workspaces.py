@@ -389,8 +389,36 @@ def transfer_ownership(
 
     Returns the *caller's* own WorkspaceOut (now role="member"), the same
     shape update_workspace_visibility returns - the frontend uses it to
-    refresh its own view of this workspace without a second round trip."""
-    workspace = require_workspace_owner(workspace_id, db, current_user)
+    refresh its own view of this workspace without a second round trip.
+
+    Locks the caller's own membership row (SELECT ... FOR UPDATE) before
+    checking or changing anything, rather than using the plain
+    require_workspace_owner/_get_membership helpers every other owner-only
+    endpoint in this file uses unlocked. Nothing in the schema stops two
+    "owner" rows existing in the same workspace at once, so without this,
+    two near-simultaneous transfer requests from the same owner to two
+    different targets could both pass an unlocked role check before
+    either commits, and both succeed - leaving the workspace with two
+    owners, contradicting this function's own "never with two" guarantee
+    above. With the lock, the second request blocks until the first's
+    transaction commits, then re-reads the row - now "member" - and
+    correctly 403s instead of racing to also transfer ownership. A
+    smaller, more surgical fix than a new partial unique index/migration,
+    matching how narrow this race actually is: it needs the same owner
+    racing against themselves, so only this one endpoint needs it."""
+    current_owner_membership = db.scalar(
+        select(WorkspaceMembership)
+        .where(
+            WorkspaceMembership.workspace_id == workspace_id,
+            WorkspaceMembership.user_id == current_user.id,
+        )
+        .with_for_update()
+    )
+    if current_owner_membership is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if current_owner_membership.role != "owner":
+        raise HTTPException(status_code=403, detail="Only the workspace owner can do this")
+    workspace = current_owner_membership.workspace
 
     if payload.new_owner_user_id == current_user.id:
         raise HTTPException(status_code=400, detail="You are already the owner of this workspace")
@@ -404,7 +432,6 @@ def transfer_ownership(
     if target_membership is None:
         raise HTTPException(status_code=404, detail="That user is not a member of this workspace")
 
-    current_owner_membership = _get_membership(workspace_id, current_user, db)
     current_owner_membership.role = "member"
     target_membership.role = "owner"
     db.commit()
