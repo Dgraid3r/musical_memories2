@@ -66,6 +66,14 @@ class User(Base):
     # by WorkspaceInvite.revoked_at/accepted_at and
     # PasswordResetToken.used_at.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Google's stable per-account identifier (the "sub" claim in their ID
+    # token) - kept separate from email since email can theoretically
+    # change on Google's side while sub never does. Null for a local-only
+    # account (most accounts); unique only among non-null values, which
+    # Postgres already gives a nullable unique index for free (multiple
+    # NULLs are never considered duplicates of each other). See
+    # routers/google_auth.py.
+    google_sub: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
 
     entries: Mapped[list["JournalEntry"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
