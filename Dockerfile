@@ -38,4 +38,15 @@ COPY --from=frontend-build /frontend/dist ./static/dist
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
+# Runs as a dedicated non-root user rather than root - narrows what an
+# attacker could do if a future containment bug (like the path-traversal
+# one just fixed in app/main.py's serve_frontend) ever slipped through
+# again. Owns /app so the app can still create its own runtime-only
+# subdirectories there (e.g. the local-disk fallback storage backend's
+# uploads/backups dirs - see app/storage.py - used only when
+# OBJECT_STORAGE_* isn't configured).
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 ENTRYPOINT ["/docker-entrypoint.sh"]
