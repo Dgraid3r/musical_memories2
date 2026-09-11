@@ -74,6 +74,18 @@ class User(Base):
     # NULLs are never considered duplicates of each other). See
     # routers/google_auth.py.
     google_sub: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
+    # Site-wide admin flag (see auth.require_admin, routers/admin.py) -
+    # entirely separate from a WorkspaceMembership role (owner/member/
+    # subscriber), which only governs access within one workspace, not
+    # the platform. Granted via scripts/grant_admin.py, never a web
+    # endpoint (see that script's docstring for why).
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # A reversible, admin-initiated block on logging in - distinct from
+    # deleted_at's permanent, self-initiated deletion above. Deactivating
+    # touches only this flag: the account's data, memberships, and every
+    # other field are left completely untouched, and reactivating
+    # restores login immediately. See routers/admin.py.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
     entries: Mapped[list["JournalEntry"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
@@ -409,6 +421,22 @@ class PasswordResetToken(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="password_reset_tokens")
+
+
+class BackupRun(Base):
+    """One row per scripts/backup_database.py attempt, success or
+    failure - written by that script itself at the end of every run (see
+    its run() function), read back by GET /api/admin/stats so an admin
+    can see the most recent backup's outcome without reading logs. No
+    relationship to User - this is an operational record, not
+    per-account data, and nothing else in the app references it."""
+
+    __tablename__ = "backup_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # --- Full-text search -------------------------------------------------------

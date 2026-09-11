@@ -29,8 +29,16 @@ def login(request: Request, payload: LoginInput, db: Session = Depends(get_db)):
     # to find it under the old, real username in practice - the explicit
     # is_deleted check is defense in depth, not the only thing stopping
     # this, and keeps the same generic message rather than confirming an
-    # account by that name ever existed.
-    if user is None or user.is_deleted or not verify_password(payload.password, user.hashed_password):
+    # account by that name ever existed. is_active is the reversible
+    # admin-deactivation counterpart (see routers/admin.py) - same
+    # generic message either way, so a deactivated user learns nothing
+    # different from a wrong password.
+    if (
+        user is None
+        or user.is_deleted
+        or not user.is_active
+        or not verify_password(payload.password, user.hashed_password)
+    ):
         logger.warning("auth.login_failed username=%r", payload.username)
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     logger.info("auth.login_succeeded user_id=%s", user.id)
