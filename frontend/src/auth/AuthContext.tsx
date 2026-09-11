@@ -4,6 +4,29 @@ import type { User } from '../types'
 
 const TOKEN_STORAGE_KEY = 'musical_memories_token'
 
+/** Reads a freshly-issued token out of the URL fragment left by the
+ * Google sign-in redirect (GET /api/auth/google/callback ->
+ * `<frontend>/#token=...`) and strips it from the URL immediately -
+ * called at most once, from the token useState's lazy initializer below.
+ * A fragment (never a query param) is what the backend deliberately used
+ * here specifically because it's never sent to any server (ours or a
+ * proxy/CDN in front of it) or written to access logs - see
+ * routers/google_auth.py's callback docstring. */
+function readTokenFromFragment(): string | null {
+  if (!window.location.hash) return null
+  const params = new URLSearchParams(window.location.hash.slice(1))
+  const token = params.get('token')
+  if (!token) return null
+  params.delete('token')
+  const rest = params.toString()
+  window.history.replaceState(
+    {},
+    '',
+    window.location.pathname + window.location.search + (rest ? `#${rest}` : ''),
+  )
+  return token
+}
+
 interface AuthContextValue {
   user: User | null
   token: string | null
@@ -17,7 +40,13 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_STORAGE_KEY))
+  // A token delivered via the Google sign-in redirect fragment takes
+  // priority over anything already in localStorage (it's the freshest
+  // possible credential, e.g. after signing in as a different Google
+  // account than whichever local session was previously stored).
+  const [token, setToken] = useState<string | null>(
+    () => readTokenFromFragment() ?? localStorage.getItem(TOKEN_STORAGE_KEY),
+  )
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -27,7 +56,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return
     }
     fetchCurrentUser(token)
-      .then(setUser)
+      .then((currentUser) => {
+        // Persisted here (not just after a plain login()) so a token
+        // that arrived via the fragment - which never goes through
+        // login() - is stored through that exact same mechanism once
+        // validated, rather than a second parallel storage path.
+        localStorage.setItem(TOKEN_STORAGE_KEY, token)
+        setUser(currentUser)
+      })
       .catch(() => {
         // stored token is stale/invalid - drop it and require login again
         localStorage.removeItem(TOKEN_STORAGE_KEY)
