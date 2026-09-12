@@ -27,6 +27,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app ./app
 COPY backend/alembic ./alembic
 COPY backend/alembic.ini .
+# grant_admin.py (see its own docstring) is the only supported way to
+# create the first admin - deliberately not a web endpoint - so it has
+# to actually be present in the deployed container to be runnable via
+# `docker exec`/the host's shell access. backup_database.py/
+# restore_database.py/migrate_uploads_to_object_storage.py ride along
+# too; all of scripts/ already only depends on packages requirements.txt
+# already installs above (app.database/app.models/boto3), so this is a
+# pure file copy - no new dependencies for this image.
+COPY backend/scripts ./scripts
 
 # The built frontend lands at /app/static/dist - app/main.py serves it
 # from there (assets at /assets, an index.html SPA fallback for
