@@ -4,9 +4,11 @@
 # see the README's "Running locally"). Based on postgres:16-alpine
 # specifically so pg_dump/psql are the exact matching version already
 # used by the postgres service itself, with Python layered on top to
-# run backup_database.py (which reuses app/storage.py for the
-# object-storage upload path, so it needs the same dependencies the
-# backend itself does).
+# run backup_database.py, which reuses app/storage.py for the
+# object-storage upload path and app/database.py + app/models.py (plus
+# app/crypto.py, imported transitively by models.py) to record each
+# run's outcome as a BackupRun row - so it needs those same modules and
+# their dependencies alongside it, not just storage.py.
 
 FROM postgres:16-alpine
 
@@ -19,6 +21,9 @@ ENV PATH="/venv/bin:$PATH"
 
 COPY app/storage.py ./app/storage.py
 COPY app/__init__.py ./app/__init__.py
+COPY app/database.py ./app/database.py
+COPY app/models.py ./app/models.py
+COPY app/crypto.py ./app/crypto.py
 COPY scripts ./scripts
 
 RUN chmod +x scripts/run_backup_daily.sh
