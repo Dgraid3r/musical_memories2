@@ -310,6 +310,12 @@ export interface EntrySearchParams {
   /** Only entries with a location set - powers the map view. Same
    * visibility rules as every other entry listing. */
   locatedOnly?: boolean
+  /** Same limit/offset pagination convention as fetchPublicWorkspaces
+   * above - `offset` is how the caller pages through results ("load
+   * more" - see App.tsx's entry list). Omitting `limit` gets the
+   * backend's own default page size. */
+  limit?: number
+  offset?: number
 }
 
 export async function fetchEntries(
@@ -321,6 +327,8 @@ export async function fetchEntries(
   if (params.q) query.set('q', params.q)
   if (params.tag) query.set('tag', params.tag)
   if (params.locatedOnly) query.set('located_only', 'true')
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  if (params.offset !== undefined) query.set('offset', String(params.offset))
   const qs = query.toString()
   const res = await fetch(`/api/workspaces/${workspaceId}/entries${qs ? `?${qs}` : ''}`, {
     headers: authHeaders(token),

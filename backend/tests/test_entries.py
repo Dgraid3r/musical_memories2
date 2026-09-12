@@ -435,6 +435,100 @@ def test_list_entries_is_symmetric_across_two_members_with_private_entries(clien
     assert bob_view == {"bob-priv", "bob-pub", "alice-pub"}
 
 
+def test_list_entries_default_limit_is_twenty(client, make_user, make_workspace):
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    for i in range(25):
+        _create_entry(client, ws["id"], alice["headers"], is_public=True, playlist_id=f"p{i}")
+
+    res = client.get(f"/api/workspaces/{ws['id']}/entries", headers=alice["headers"])
+    assert res.status_code == 200
+    assert len(res.json()) == 20
+
+
+def test_list_entries_limit_caps_the_number_of_results(client, make_user, make_workspace):
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    for i in range(5):
+        _create_entry(client, ws["id"], alice["headers"], is_public=True, playlist_id=f"p{i}")
+
+    res = client.get(f"/api/workspaces/{ws['id']}/entries?limit=2", headers=alice["headers"])
+    assert res.status_code == 200
+    assert len(res.json()) == 2
+
+
+def test_list_entries_offset_pages_through_distinct_results(client, make_user, make_workspace):
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    for i in range(5):
+        _create_entry(client, ws["id"], alice["headers"], is_public=True, playlist_id=f"p{i}")
+
+    page1 = client.get(f"/api/workspaces/{ws['id']}/entries?limit=2&offset=0", headers=alice["headers"])
+    page2 = client.get(f"/api/workspaces/{ws['id']}/entries?limit=2&offset=2", headers=alice["headers"])
+    assert page1.status_code == 200
+    assert page2.status_code == 200
+    page1_ids = [e["id"] for e in page1.json()]
+    page2_ids = [e["id"] for e in page2.json()]
+    assert len(page1_ids) == 2
+    assert len(page2_ids) == 2
+    assert set(page1_ids).isdisjoint(page2_ids)
+
+
+def test_list_entries_limit_rejects_values_above_the_max(client, make_user, make_workspace):
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    res = client.get(f"/api/workspaces/{ws['id']}/entries?limit=101", headers=alice["headers"])
+    assert res.status_code == 422
+
+
+def test_list_entries_limit_rejects_zero_or_negative(client, make_user, make_workspace):
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    res = client.get(f"/api/workspaces/{ws['id']}/entries?limit=0", headers=alice["headers"])
+    assert res.status_code == 422
+
+
+def test_list_entries_offset_rejects_negative(client, make_user, make_workspace):
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    res = client.get(f"/api/workspaces/{ws['id']}/entries?offset=-1", headers=alice["headers"])
+    assert res.status_code == 422
+
+
+def test_list_entries_eager_loaded_relationships_have_correct_data(client, make_user, make_workspace):
+    """The selectinload eager-loading added to list_entries for
+    coauthors/images/tags must only change how many queries this costs
+    (see the router's own comment), never what data comes back - an
+    entry's coauthors, images, and tags must still be exactly right."""
+    alice = make_user("alice")
+    bob = make_user("bob")
+    ws = make_workspace(alice, bob)
+    create_res = client.post(
+        f"/api/workspaces/{ws['id']}/entries",
+        headers=alice["headers"],
+        data={
+            "start_date": "2026-01-01",
+            "playlist_id": "p1",
+            "playlist_name": "Test",
+            "playlist_url": "https://open.spotify.com/playlist/p1",
+            "is_public": "true",
+        },
+        files=[
+            ("images", ("photo.png", b"fake image bytes", "image/png")),
+            ("coauthor_usernames", (None, "bob")),
+            ("tags", (None, "roadtrip")),
+        ],
+    )
+    assert create_res.status_code == 201, create_res.text
+
+    res = client.get(f"/api/workspaces/{ws['id']}/entries", headers=alice["headers"])
+    assert res.status_code == 200
+    entry = res.json()[0]
+    assert [c["username"] for c in entry["coauthors"]] == ["bob"]
+    assert len(entry["images"]) == 1
+    assert [t["name"] for t in entry["tags"]] == ["roadtrip"]
+
+
 def test_get_private_entry_as_non_owner_returns_404(client, make_user, make_workspace):
     alice = make_user("alice")
     bob = make_user("bob")
