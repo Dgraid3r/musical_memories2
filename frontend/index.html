@@ -3,6 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <!-- Apple doesn't read the web app manifest's icons for "Add to Home
+         Screen" - it needs its own explicit link, unlike everything else
+         here (manifest link/theme-color meta are auto-injected by
+         vite-plugin-pwa at build time from vite.config.ts's manifest). -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
+    <!-- Same value as vite.config.ts's manifest.theme_color (the accent
+         token from App.css) - some browsers (notably Safari) read this
+         meta tag directly rather than the manifest for status-bar/toolbar
+         tinting. -->
+    <meta name="theme-color" content="#8a2f3f" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Musical Memories</title>
 
