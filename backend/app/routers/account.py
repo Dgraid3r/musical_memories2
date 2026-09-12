@@ -1,16 +1,19 @@
+import io
+import json
 import logging
 import os
 import secrets
+import zipfile
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, hash_password, verify_password
 from ..database import get_db
 from ..email import send_email
-from ..models import EmailVerificationToken, PasswordResetToken, User, WorkspaceMembership
+from ..models import Comment, EmailVerificationToken, JournalEntry, PasswordResetToken, User, WorkspaceMembership
 from ..rate_limit import AUTH_RATE_LIMIT, limiter
 from ..schemas import (
     AccountDeleteInput,
@@ -21,6 +24,7 @@ from ..schemas import (
     PasswordResetRequestOut,
     UserOut,
 )
+from ..storage import get_storage
 from .workspaces import collect_workspace_image_filenames, delete_stored_images
 
 logger = logging.getLogger(__name__)
@@ -282,3 +286,138 @@ def delete_account(
     delete_stored_images(image_filenames)
     logger.warning("account.deleted user_id=%s", current_user.id)
     return AccountDeleteOut(detail="Your account has been permanently deleted.")
+
+
+# --- Data export -------------------------------------------------------
+
+
+@router.get("/export")
+def export_account_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Streams back a zip archive of the caller's own data: profile
+    basics, every entry they're the primary author *or* a co-author of,
+    every comment they personally wrote (anywhere, including on someone
+    else's entry), and the actual photo files for their entries.
+
+    Deliberately scoped to content this user created, not everything
+    they can see - being a workspace member with view access is not
+    enough to include an entry here, and another member's comment on
+    this user's own entry is that member's data, not this user's, so it
+    is excluded too (see the entries/comments queries below, which never
+    touch workspace membership).
+
+    Built and returned synchronously (an in-memory zip, no background
+    export job) - matches this app's scale and the existing no-background-
+    infrastructure approach used everywhere else. A user with no entries
+    and no comments still gets back a valid, mostly-empty archive rather
+    than an error; there is nothing here that can legitimately 404.
+    """
+    entries = (
+        db.scalars(
+            select(JournalEntry).where(
+                or_(
+                    JournalEntry.user_id == current_user.id,
+                    JournalEntry.coauthors.any(User.id == current_user.id),
+                )
+            )
+        )
+        .unique()
+        .all()
+    )
+    comments = db.scalars(select(Comment).where(Comment.author_id == current_user.id)).all()
+
+    storage = get_storage()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        entries_data = []
+        for entry in entries:
+            entries_data.append(
+                {
+                    "id": entry.id,
+                    # "author" (primary owner) vs. "coauthor" - both are
+                    # this user's own content, but the distinction is
+                    # useful context for anyone reading the export later.
+                    "role": "author" if entry.user_id == current_user.id else "coauthor",
+                    "workspace": {"id": entry.workspace_id, "name": entry.workspace.name},
+                    "start_date": entry.start_date.isoformat(),
+                    "end_date": entry.end_date.isoformat(),
+                    "text": entry.text,
+                    "is_public": entry.is_public,
+                    "tags": [tag.name for tag in entry.tags],
+                    "location": (
+                        {
+                            "latitude": entry.latitude,
+                            "longitude": entry.longitude,
+                            "name": entry.location_name,
+                        }
+                        if entry.location_name is not None
+                        else None
+                    ),
+                    "playlist": {
+                        "id": entry.playlist_id,
+                        "name": entry.playlist_name,
+                        "url": entry.playlist_url,
+                        "image_url": entry.playlist_image_url,
+                    },
+                    "created_at": entry.created_at.isoformat(),
+                    # Filenames here are exactly the names each photo is
+                    # written under below, in photos/ - the join between
+                    # this JSON and the archive's photo files.
+                    "photos": [image.filename for image in entry.images],
+                }
+            )
+            for image in entry.images:
+                try:
+                    photo_bytes = storage.get_bytes(image.filename)
+                except Exception:
+                    # A single missing/corrupted photo shouldn't abort the
+                    # whole export - same "log, don't raise" precedent as
+                    # workspaces.delete_stored_images above. The entry's
+                    # JSON still lists the filename, so a gap here is at
+                    # least visible rather than silently misleading.
+                    logger.warning(
+                        "account.export_photo_fetch_failed entry_id=%s image_id=%s filename=%s",
+                        entry.id,
+                        image.id,
+                        image.filename,
+                        exc_info=True,
+                    )
+                    continue
+                archive.writestr(f"photos/{image.filename}", photo_bytes)
+
+        comments_data = [
+            {
+                "id": comment.id,
+                "entry_id": comment.entry_id,
+                "parent_comment_id": comment.parent_comment_id,
+                "body": comment.body,
+                "created_at": comment.created_at.isoformat(),
+                "edited_at": comment.edited_at.isoformat() if comment.edited_at is not None else None,
+            }
+            for comment in comments
+        ]
+
+        export_data = {
+            "profile": {
+                "username": current_user.username,
+                "email": current_user.email,
+                "created_at": current_user.created_at.isoformat(),
+            },
+            "entries": entries_data,
+            "comments": comments_data,
+        }
+        archive.writestr("data.json", json.dumps(export_data, indent=2))
+
+    logger.info(
+        "account.exported user_id=%s entry_count=%s comment_count=%s",
+        current_user.id,
+        len(entries),
+        len(comments),
+    )
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="musical-memories-export.zip"'},
+    )
