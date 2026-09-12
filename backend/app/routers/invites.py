@@ -10,11 +10,48 @@ from ..auth import get_current_user
 from ..database import get_db
 from ..models import User, WorkspaceInvite, WorkspaceMembership
 from ..rate_limit import AUTH_RATE_LIMIT, limiter
-from ..schemas import WorkspaceInvitePreviewOut, WorkspaceMemberOut
+from ..schemas import MyPendingInviteOut, WorkspaceInvitePreviewOut, WorkspaceMemberOut
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/invites", tags=["invites"])
+
+
+@router.get("", response_model=list[MyPendingInviteOut])
+def list_my_pending_invites(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Every invite currently pending for the caller's own email - the
+    frontend's own surface for a logged-in user to see (and act on) an
+    invite beyond just finding the emailed link. Workspaces.create_invite
+    also creates an in-app Notification for this same case when the
+    invited email matches an existing account (see that function) - this
+    endpoint is where that notification, or just directly checking, both
+    lead. Same "accepted/revoked/expired invites drop off" scoping as
+    workspaces.list_invites (the owner-facing equivalent of this list)."""
+    stmt = (
+        select(WorkspaceInvite)
+        .where(
+            WorkspaceInvite.email == current_user.email.lower(),
+            WorkspaceInvite.accepted_at.is_(None),
+            WorkspaceInvite.revoked_at.is_(None),
+            WorkspaceInvite.expires_at > datetime.utcnow(),
+        )
+        .order_by(WorkspaceInvite.created_at.desc())
+    )
+    return [
+        MyPendingInviteOut(
+            token=invite.token,
+            workspace_id=invite.workspace_id,
+            workspace_name=invite.workspace.name,
+            role=invite.role,
+            inviter_username=invite.inviter.username,
+            created_at=invite.created_at,
+            expires_at=invite.expires_at,
+        )
+        for invite in db.scalars(stmt).all()
+    ]
 
 
 def _get_valid_invite_or_error(token: str, db: Session) -> WorkspaceInvite:

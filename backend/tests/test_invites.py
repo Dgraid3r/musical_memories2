@@ -185,6 +185,82 @@ def test_revoked_invite_cannot_be_accepted(client, make_user, make_workspace):
     assert accept_res.status_code == 410
 
 
+# --- Listing my own pending invites (GET /api/invites) ----------------------
+
+
+def test_list_my_pending_invites_requires_auth(client):
+    res = client.get("/api/invites")
+    assert res.status_code == 401
+
+
+def test_list_my_pending_invites_shows_invites_addressed_to_my_email(client, make_user, make_workspace):
+    alice = make_user("alice")
+    carol = make_user("carol")
+    ws = make_workspace(alice, name="Family Journal")
+    _create_invite(client, alice, ws, carol["email"], role="subscriber")
+
+    res = client.get("/api/invites", headers=carol["headers"])
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body) == 1
+    assert body[0]["workspace_id"] == ws["id"]
+    assert body[0]["workspace_name"] == "Family Journal"
+    assert body[0]["role"] == "subscriber"
+    assert body[0]["inviter_username"] == "alice"
+    assert body[0]["token"] == _token_for(carol["email"])
+
+
+def test_list_my_pending_invites_never_shows_someone_elses(client, make_user, make_workspace):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    carol = make_user("carol")
+    ws = make_workspace(alice)
+    _create_invite(client, alice, ws, carol["email"])
+
+    res = client.get("/api/invites", headers=bob["headers"])
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_list_my_pending_invites_excludes_accepted(client, make_user, make_workspace):
+    alice = make_user("alice")
+    carol = make_user("carol")
+    ws = make_workspace(alice)
+    _create_invite(client, alice, ws, carol["email"])
+    client.post(f"/api/invites/{_token_for(carol['email'])}/accept", headers=carol["headers"])
+
+    res = client.get("/api/invites", headers=carol["headers"])
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_list_my_pending_invites_excludes_revoked(client, make_user, make_workspace):
+    alice = make_user("alice")
+    carol = make_user("carol")
+    ws = make_workspace(alice)
+    invite = _create_invite(client, alice, ws, carol["email"])
+    client.delete(f"/api/workspaces/{ws['id']}/invites/{invite['id']}", headers=alice["headers"])
+
+    res = client.get("/api/invites", headers=carol["headers"])
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_list_my_pending_invites_excludes_expired(client, make_user, make_workspace, db_session):
+    alice = make_user("alice")
+    carol = make_user("carol")
+    ws = make_workspace(alice)
+    _create_invite(client, alice, ws, carol["email"])
+
+    record = db_session.query(WorkspaceInvite).filter_by(email="carol@example.com").one()
+    record.expires_at = datetime.utcnow() - timedelta(days=1)
+    db_session.commit()
+
+    res = client.get("/api/invites", headers=carol["headers"])
+    assert res.status_code == 200
+    assert res.json() == []
+
+
 # --- Accepting as an existing user ------------------------------------------
 
 
