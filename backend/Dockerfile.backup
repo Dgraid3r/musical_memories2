@@ -1,13 +1,19 @@
-# Purpose-built, minimal image for the daily-backup sidecar service
-# defined in docker-compose.yml - NOT the application server (that's the
-# root Dockerfile; see DEPLOYMENT.md). Based on postgres:16-alpine
+# Purpose-built, minimal image shared by this app's small daily-sidecar
+# services defined in docker-compose.yml (currently `backup` and
+# `on-this-day`) - NOT the application server (that's the root
+# Dockerfile; see DEPLOYMENT.md). Based on postgres:16-alpine
 # specifically so pg_dump/psql are the exact matching version already
 # used by the postgres service itself, with Python layered on top to
-# run backup_database.py, which reuses app/storage.py for the
-# object-storage upload path and app/database.py + app/models.py (plus
-# app/crypto.py, imported transitively by models.py) to record each
-# run's outcome as a BackupRun row - so it needs those same modules and
-# their dependencies alongside it, not just storage.py.
+# run whichever backend/scripts/ entrypoint the service that builds this
+# image selects (see docker-compose.yml's per-service `entrypoint:`).
+#
+# backup_database.py reuses app/storage.py for the object-storage upload
+# path; both it and send_on_this_day_reminders.py use app/database.py +
+# app/models.py (plus app/crypto.py, imported transitively by models.py)
+# to write a BackupRun/Notification row, and app/email.py (stdlib-only,
+# no extra dependency) for send_on_this_day_reminders.py's email side -
+# so this image carries all of those modules and their dependencies,
+# not just whichever one script number happens to need.
 
 FROM postgres:16-alpine
 
@@ -23,7 +29,10 @@ COPY app/__init__.py ./app/__init__.py
 COPY app/database.py ./app/database.py
 COPY app/models.py ./app/models.py
 COPY app/crypto.py ./app/crypto.py
+COPY app/email.py ./app/email.py
 COPY scripts ./scripts
 
-RUN chmod +x scripts/run_backup_daily.sh
-ENTRYPOINT ["scripts/run_backup_daily.sh"]
+RUN chmod +x scripts/run_backup_daily.sh scripts/run_on_this_day_reminders_daily.sh
+# No default ENTRYPOINT - each docker-compose service built from this
+# image selects its own (see docker-compose.yml's `backup`/`on-this-day`
+# services), since one image now serves more than one sidecar job.
