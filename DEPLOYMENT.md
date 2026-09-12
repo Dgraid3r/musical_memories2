@@ -130,6 +130,7 @@ Still on your app service's **Variables** tab in Railway, add these:
 
 | Variable | What it's for |
 |---|---|
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | Only needed if you want the "Sign in with Google" button to appear. Without these, the app still works fully with local username/password accounts - the button just doesn't show. From an OAuth client in the [Google Cloud Console](https://console.cloud.google.com/) (APIs & Services -> Credentials -> Create OAuth client ID -> Web application); set `GOOGLE_REDIRECT_URI` to `<your-railway-url>/api/auth/google/callback` and add that same exact URL as an Authorized redirect URI on the OAuth client (same byte-for-byte matching requirement as `SPOTIFY_REDIRECT_URI` in step 5 below). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS` | Only needed if you want workspace-invite, verify-your-email, and password-reset emails to actually be delivered. Without these, the app still works fully, but those links are only written to the server's own logs instead of emailed - fine for just you, not for inviting anyone else to a private workspace. A personal Gmail account works (see the README's "Security and operations" section for the exact settings). |
 | `SENTRY_DSN` | Only needed if you want errors reported to a [Sentry](https://sentry.io) account for visibility into problems after deploy. Without it, errors are just logged normally. |
 
