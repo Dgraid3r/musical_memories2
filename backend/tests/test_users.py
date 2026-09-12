@@ -35,6 +35,39 @@ def test_register_duplicate_email_conflicts(client):
     assert res.status_code == 409
 
 
+def test_register_normalizes_email_to_lowercase(client):
+    """Emails are stored lowercase (see routers/users.register) so every
+    later exact-match lookup - login-adjacent flows, password reset,
+    Google sign-in linking, invite matching - can compare with a plain ==
+    instead of relying on ilike as a case-insensitivity workaround."""
+    res = client.post(
+        "/api/users",
+        json={"username": "mixedcase", "email": "MixedCase@Example.COM", "password": "password123"},
+    )
+    assert res.status_code == 201
+    assert res.json()["email"] == "mixedcase@example.com"
+
+
+def test_register_duplicate_email_different_case_conflicts(client):
+    """Before email normalization, "Alice@x.com" and "alice@x.com" could
+    both register successfully as if they were different addresses - a
+    real inconsistency (User.email's unique constraint is itself
+    case-sensitive) that made later lookups nondeterministic. Normalizing
+    on write closes that: these two must now be treated as the same
+    address."""
+    first = client.post(
+        "/api/users",
+        json={"username": "alice", "email": "Alice@Example.com", "password": "password123"},
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        "/api/users",
+        json={"username": "alice2", "email": "ALICE@EXAMPLE.COM", "password": "password123"},
+    )
+    assert second.status_code == 409
+
+
 def test_register_short_password_rejected(client):
     res = client.post(
         "/api/users",

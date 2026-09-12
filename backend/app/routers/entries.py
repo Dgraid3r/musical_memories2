@@ -31,6 +31,20 @@ router = APIRouter(prefix="/api/workspaces/{workspace_id}/entries", tags=["entri
 ENTRIES_DEFAULT_LIMIT = 20
 ENTRIES_MAX_LIMIT = 100
 
+# Entry-photo upload validation. The frontend's own file picker already
+# restricts to accept="image/*" (see NewEntryForm.tsx/EntryCard.tsx), but
+# that's an unenforced client-side hint, not a server-side guarantee - a
+# direct API call can send anything under any content-type. Before this,
+# _save_images accepted any extension/content-type and any size, with no
+# allowlist and no cap.
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+ALLOWED_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+# 20MB - generous for a phone photo (even a high-resolution JPEG capture is
+# ordinarily a few MB) while still bounding what one upload can cost in
+# storage and request-handling time; not so large that it's an easy way to
+# make a handful of requests eat a lot of disk/object-storage space.
+MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
+
 # Not workspace-nested, like /api/comments/{id} - the entry_id in the path
 # is enough to resolve the owning workspace via the entry itself, and this
 # is the *only* path to an image's bytes now: every fetch goes through
@@ -220,14 +234,42 @@ def _save_images(images: list[UploadFile], entry_id: int, db: Session) -> list[E
     """Returns the EntryImage rows actually created - a request can arrive
     with zero usable files (every UploadFile missing a filename), and the
     caller (add_images) uses this to decide whether an edit-history event
-    is warranted."""
+    is warranted.
+
+    Rejects (400, before anything is saved) any file whose extension or
+    content-type isn't in the image allowlist, or whose size exceeds
+    MAX_IMAGE_UPLOAD_BYTES - raised mid-loop, so an invalid file anywhere
+    in the batch discards the whole request rather than silently saving
+    only the files that came before it."""
     storage = get_storage()
     saved: list[EntryImage] = []
     for image in images:
         if not image.filename:
             continue
         suffix = Path(image.filename).suffix
-        stored_name = storage.save(image.file.read(), suffix)
+        if suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS or image.content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type - only JPEG, PNG, WEBP, and GIF images can be uploaded.",
+            )
+        # image.size is populated by Starlette's multipart parser from the
+        # bytes it already received, so this rejects an oversized file
+        # without this function itself reading it into memory first.
+        if image.size is not None and image.size > MAX_IMAGE_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"That image is too large - the limit is {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)}MB per photo.",
+            )
+        data = image.file.read()
+        if len(data) > MAX_IMAGE_UPLOAD_BYTES:
+            # Defensive fallback for the (in this codebase's usage,
+            # untriggered) case where image.size wasn't populated - the
+            # same limit enforced against the actual bytes read.
+            raise HTTPException(
+                status_code=400,
+                detail=f"That image is too large - the limit is {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)}MB per photo.",
+            )
+        stored_name = storage.save(data, suffix)
         entry_image = EntryImage(entry_id=entry_id, filename=stored_name)
         db.add(entry_image)
         saved.append(entry_image)

@@ -6,6 +6,16 @@ from app import auth
 from app.auth import verify_password
 from app.google_oauth import GoogleIdentity, GoogleSignInUnavailable, GoogleTokenInvalid, is_configured
 from app.models import User
+from app.routers.google_auth import GOOGLE_SIGNIN_NONCE_COOKIE
+
+
+def _valid_state_and_cookies(nonce: str = "test-nonce") -> tuple[str, dict[str, str]]:
+    """A create_signin_state token plus the matching cookie dict the real
+    /login endpoint would have set on the browser making this request -
+    verify_signin_state now requires both to agree (see auth.py), so any
+    test that needs a signin state the callback will actually accept uses
+    this rather than calling create_signin_state directly."""
+    return auth.create_signin_state(nonce), {GOOGLE_SIGNIN_NONCE_COOKIE: nonce}
 
 # --- google_oauth.exchange_code_for_identity (unit-level) ------------------
 #
@@ -167,7 +177,9 @@ def test_google_login_state_is_verifiable_signin_state(client):
         res = client.get("/api/auth/google/login", follow_redirects=False)
 
     assert res.status_code in (302, 307)
-    assert auth.verify_signin_state(captured["state"]) is True
+    cookie_nonce = res.cookies.get(GOOGLE_SIGNIN_NONCE_COOKIE)
+    assert cookie_nonce is not None
+    assert auth.verify_signin_state(captured["state"], cookie_nonce) is True
 
 
 def test_google_login_returns_503_when_not_configured(client, monkeypatch):
@@ -225,17 +237,17 @@ def test_google_callback_expired_state_rejected(client):
 
     with patch("app.auth.datetime") as mock_dt:
         mock_dt.now.return_value = datetime.now(auth.timezone.utc) - timedelta(minutes=20)
-        state = auth.create_signin_state()
+        state, cookies = _valid_state_and_cookies()
 
-    res = client.get(f"/api/auth/google/callback?code=abc&state={state}", follow_redirects=False)
+    res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
     assert res.status_code in (302, 307)
     assert "google=invalid_state" in res.headers["location"]
 
 
 def test_google_callback_token_exchange_unavailable_redirects_with_flag(client):
-    state = auth.create_signin_state()
+    state, cookies = _valid_state_and_cookies()
     with patch("app.routers.google_auth.exchange_code_for_identity", side_effect=GoogleSignInUnavailable("x")):
-        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", follow_redirects=False)
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
     assert res.status_code in (302, 307)
     assert "google=unavailable" in res.headers["location"]
 
@@ -245,11 +257,76 @@ def test_google_callback_invalid_token_redirects_with_flag(client):
     failure path - proven at the unit level above that exchange_code_for_
     identity itself raises; this confirms the callback turns that into a
     clean redirect flag rather than a 500."""
-    state = auth.create_signin_state()
+    state, cookies = _valid_state_and_cookies()
     with patch("app.routers.google_auth.exchange_code_for_identity", side_effect=GoogleTokenInvalid("bad token")):
-        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", follow_redirects=False)
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
     assert res.status_code in (302, 307)
     assert "google=invalid_token" in res.headers["location"]
+
+
+# --- GET /api/auth/google/callback: CSRF nonce-cookie binding ---------------
+
+
+def test_google_callback_state_with_no_cookie_at_all_rejected(client):
+    """The core CSRF fix: a validly-signed, unexpired, correct-purpose
+    state token is *not* enough on its own - see auth.verify_signin_state.
+    Without the matching cookie, this must be rejected exactly like any
+    other invalid state, never treated as good just because the signature
+    checks out."""
+    state = auth.create_signin_state("real-nonce")
+    res = client.get(f"/api/auth/google/callback?code=abc&state={state}", follow_redirects=False)
+    assert res.status_code in (302, 307)
+    assert "google=invalid_state" in res.headers["location"]
+
+
+def test_google_callback_state_with_mismatched_cookie_rejected(client, db_session):
+    """The actual attack this closes: an attacker completes their own
+    sign-in to obtain a validly-signed state (bound to *their* nonce
+    cookie), then gets a victim's browser to hit the callback with the
+    attacker's code/state but the victim's own (different) nonce cookie.
+    The mismatch must be rejected, and critically must never proceed far
+    enough to exchange the code or touch the database."""
+    state = auth.create_signin_state("attackers-nonce")
+    before_count = db_session.query(User).count()
+
+    with patch("app.routers.google_auth.exchange_code_for_identity") as mock_exchange:
+        res = client.get(
+            f"/api/auth/google/callback?code=abc&state={state}",
+            cookies={GOOGLE_SIGNIN_NONCE_COOKIE: "victims-nonce"},
+            follow_redirects=False,
+        )
+
+    assert res.status_code in (302, 307)
+    assert "google=invalid_state" in res.headers["location"]
+    mock_exchange.assert_not_called()
+    assert db_session.query(User).count() == before_count
+
+
+def test_google_login_sets_httponly_samesite_nonce_cookie(client):
+    """Confirms the cookie login() sets actually carries the CSRF-relevant
+    attributes - httpOnly (never readable from page JS) and SameSite=Lax
+    (still sent on the top-level GET navigation Google's redirect back to
+    /callback performs)."""
+    with patch("app.routers.google_auth.build_authorize_url", return_value="https://accounts.google.com/x"):
+        res = client.get("/api/auth/google/login", follow_redirects=False)
+
+    set_cookie = res.headers.get("set-cookie", "")
+    assert GOOGLE_SIGNIN_NONCE_COOKIE in set_cookie
+    assert "httponly" in set_cookie.lower()
+    assert "samesite=lax" in set_cookie.lower()
+
+
+def test_google_callback_clears_nonce_cookie_after_success(client):
+    """The cookie is single-use - clear/expired once the callback consumes
+    it, whichever way the sign-in attempt resolves."""
+    state, cookies = _valid_state_and_cookies()
+    identity = GoogleIdentity(sub="google-sub-cookie-clear", email="cookieclear@example.com")
+    with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
+
+    set_cookie = res.headers.get("set-cookie", "").lower()
+    assert GOOGLE_SIGNIN_NONCE_COOKIE in set_cookie
+    assert "max-age=0" in set_cookie
 
 
 # --- GET /api/auth/google/callback: account matching/creation --------------
@@ -260,12 +337,25 @@ def _token_from_fragment(location: str) -> str:
     return location.split("#token=", 1)[1]
 
 
+def _mark_email_verified(db_session, user_id: int) -> None:
+    """make_user registers through the ordinary /api/users endpoint, which
+    (by design - see routers/account.py's email-verification section)
+    never requires proving email ownership, so its accounts start
+    unverified. Tests exercising the auto-link path specifically need a
+    *verified* existing account to reach it (see google_auth.callback's
+    email_verified gate) - this sets that up directly rather than running
+    the full email-verification-link flow just to flip one flag."""
+    user = db_session.get(User, user_id)
+    user.email_verified = True
+    db_session.commit()
+
+
 def test_google_callback_creates_new_account(client, db_session):
-    state = auth.create_signin_state()
+    state, cookies = _valid_state_and_cookies()
     identity = GoogleIdentity(sub="google-sub-new", email="brandnew@example.com")
 
     with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
-        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", follow_redirects=False)
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
 
     assert res.status_code in (302, 307)
     token = _token_from_fragment(res.headers["location"])
@@ -294,10 +384,10 @@ def test_google_callback_deduplicates_username_with_numeric_suffix(client, db_se
     )
     assert taken_res.status_code == 201
 
-    state = auth.create_signin_state()
+    state, cookies = _valid_state_and_cookies()
     identity = GoogleIdentity(sub="google-sub-dup", email="newperson@gmail.com")
     with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
-        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", follow_redirects=False)
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
 
     assert res.status_code in (302, 307)
     user = db_session.query(User).filter_by(google_sub="google-sub-dup").one()
@@ -306,11 +396,12 @@ def test_google_callback_deduplicates_username_with_numeric_suffix(client, db_se
 
 def test_google_callback_links_existing_local_account_by_verified_email(client, make_user, db_session):
     bob = make_user("bob")  # email is bob@example.com (see make_user fixture)
+    _mark_email_verified(db_session, bob["id"])
 
-    state = auth.create_signin_state()
+    state, cookies = _valid_state_and_cookies()
     identity = GoogleIdentity(sub="google-sub-bob", email="bob@example.com")
     with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
-        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", follow_redirects=False)
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
 
     assert res.status_code in (302, 307)
     token = _token_from_fragment(res.headers["location"])
@@ -336,10 +427,10 @@ def test_google_callback_links_existing_local_account_by_verified_email(client, 
 
 def test_google_callback_returning_google_sub_is_fast_path_and_does_not_rederive_from_email(client, db_session):
     # First sign-in creates the account.
-    state1 = auth.create_signin_state()
+    state1, cookies1 = _valid_state_and_cookies("nonce-1")
     first_identity = GoogleIdentity(sub="google-sub-returning", email="original@example.com")
     with patch("app.routers.google_auth.exchange_code_for_identity", return_value=first_identity):
-        res1 = client.get(f"/api/auth/google/callback?code=abc&state={state1}", follow_redirects=False)
+        res1 = client.get(f"/api/auth/google/callback?code=abc&state={state1}", cookies=cookies1, follow_redirects=False)
     assert res1.status_code in (302, 307)
     user_id = db_session.query(User).filter_by(google_sub="google-sub-returning").one().id
 
@@ -347,10 +438,10 @@ def test_google_callback_returning_google_sub_is_fast_path_and_does_not_rederive
     # (simulating the email having changed on Google's side) - the
     # google_sub match must be used as-is, never re-deriving the local
     # username/email from this newer email.
-    state2 = auth.create_signin_state()
+    state2, cookies2 = _valid_state_and_cookies("nonce-2")
     second_identity = GoogleIdentity(sub="google-sub-returning", email="changed@example.com")
     with patch("app.routers.google_auth.exchange_code_for_identity", return_value=second_identity):
-        res2 = client.get(f"/api/auth/google/callback?code=abc&state={state2}", follow_redirects=False)
+        res2 = client.get(f"/api/auth/google/callback?code=abc&state={state2}", cookies=cookies2, follow_redirects=False)
     assert res2.status_code in (302, 307)
 
     db_session.expire_all()
@@ -364,10 +455,10 @@ def test_google_callback_returning_google_sub_is_fast_path_and_does_not_rederive
 def test_google_callback_rejects_deleted_account_matched_via_google_sub(client, db_session):
     from datetime import datetime
 
-    state1 = auth.create_signin_state()
+    state1, cookies1 = _valid_state_and_cookies("nonce-1")
     identity = GoogleIdentity(sub="google-sub-deleted", email="deleteme@example.com")
     with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
-        res1 = client.get(f"/api/auth/google/callback?code=abc&state={state1}", follow_redirects=False)
+        res1 = client.get(f"/api/auth/google/callback?code=abc&state={state1}", cookies=cookies1, follow_redirects=False)
     assert res1.status_code in (302, 307)
 
     # This account's password is an unusable random one (see the account-
@@ -381,23 +472,72 @@ def test_google_callback_rejects_deleted_account_matched_via_google_sub(client, 
     user.deleted_at = datetime.utcnow()
     db_session.commit()
 
-    state2 = auth.create_signin_state()
+    state2, cookies2 = _valid_state_and_cookies("nonce-2")
     with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
-        res2 = client.get(f"/api/auth/google/callback?code=abc&state={state2}", follow_redirects=False)
+        res2 = client.get(f"/api/auth/google/callback?code=abc&state={state2}", cookies=cookies2, follow_redirects=False)
 
     assert res2.status_code in (302, 307)
     assert "google=account_deleted" in res2.headers["location"]
 
 
 def test_google_callback_email_case_insensitive_match(client, make_user, db_session):
-    make_user("carol")  # email carol@example.com
+    carol = make_user("carol")  # email carol@example.com
+    _mark_email_verified(db_session, carol["id"])
 
-    state = auth.create_signin_state()
+    state, cookies = _valid_state_and_cookies()
     identity = GoogleIdentity(sub="google-sub-carol", email="Carol@Example.com")
     with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
-        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", follow_redirects=False)
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
 
     assert res.status_code in (302, 307)
     users_named_carol = db_session.query(User).filter_by(username="carol").all()
     assert len(users_named_carol) == 1
     assert users_named_carol[0].google_sub == "google-sub-carol"
+
+
+# --- GET /api/auth/google/callback: unverified-existing-account conflict ---
+# (finding #1 - see google_auth.callback's email_verified gate)
+
+
+def test_google_callback_refuses_to_link_unverified_existing_account(client, make_user, db_session):
+    """The account-takeover scenario this closes: an attacker registers
+    victim@example.com locally (email_verified defaults False - local
+    registration never proves ownership), then the real owner later signs
+    in with Google using that same, Google-verified address. Auto-linking
+    must be refused - linking would hand the attacker's pre-existing,
+    attacker-controlled local account (and its attacker-known password)
+    permanent access to what the real owner just proved is their
+    address."""
+    victim_local_account = make_user("victim")  # email victim@example.com, email_verified=False by default
+    before_count = db_session.query(User).count()
+
+    state, cookies = _valid_state_and_cookies()
+    identity = GoogleIdentity(sub="google-sub-victim", email="victim@example.com")
+    with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
+
+    assert res.status_code in (302, 307)
+    assert "google=email_unverified_conflict" in res.headers["location"]
+
+    # Not linked...
+    db_session.expire_all()
+    unverified_account = db_session.get(User, victim_local_account["id"])
+    assert unverified_account.google_sub is None
+    # ...and no second account silently created for the same email either.
+    assert db_session.query(User).count() == before_count
+    assert db_session.query(User).filter_by(email="victim@example.com").count() == 1
+
+
+def test_google_callback_unverified_conflict_issues_no_token(client, make_user, db_session):
+    """Belt-and-suspenders on the same case above: the redirect must never
+    carry a #token= fragment either, since that would authenticate the
+    caller as someone even though no linking or account creation
+    happened."""
+    make_user("victim2")
+
+    state, cookies = _valid_state_and_cookies()
+    identity = GoogleIdentity(sub="google-sub-victim2", email="victim2@example.com")
+    with patch("app.routers.google_auth.exchange_code_for_identity", return_value=identity):
+        res = client.get(f"/api/auth/google/callback?code=abc&state={state}", cookies=cookies, follow_redirects=False)
+
+    assert "#token=" not in res.headers["location"]

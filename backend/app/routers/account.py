@@ -107,7 +107,15 @@ def request_password_reset(request: Request, payload: PasswordResetRequestInput,
     to an account - responding differently would let anyone probe which
     email addresses are registered (account enumeration), which this
     endpoint must not leak."""
-    user = db.scalar(select(User).where(User.email.ilike(payload.email)))
+    # == against the lowercase-normalized column, not ilike: ilike treats
+    # % and _ as SQL wildcards, and EmailStr doesn't reject them (e.g.
+    # "%@gmail.com" passes as a syntactically valid-looking email) - an
+    # attacker could otherwise wildcard-match an arbitrary victim's real
+    # account, invalidating their pending reset tokens and triggering an
+    # unsolicited reset email to them. Emails are stored lowercase (see
+    # users.register/google_auth.callback), so this only needs to lower
+    # the incoming value, never the column.
+    user = db.scalar(select(User).where(User.email == payload.email.lower()))
     if user is not None:
         # Invalidate any still-live earlier requests - only the most
         # recently requested link should actually work.

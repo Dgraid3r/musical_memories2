@@ -1,7 +1,31 @@
 # Minimal dependency set for the backup sidecar (see Dockerfile.backup),
-# not the full app's requirements.txt - backup_database.py only reaches
-# into app/storage.py, whose own imports are just fastapi (Response
-# types) and boto3 (the S3-compatible client). Pinned to match
-# requirements.txt exactly.
+# not the full app's requirements.txt - backup_database.py reaches into
+# app/storage.py (fastapi's Response types, boto3's S3-compatible
+# client) and, for _record_run's BackupRun row, app/database.py and
+# app/models.py - which pull in sqlalchemy itself, psycopg (the actual
+# Postgres driver DATABASE_URL's postgresql+psycopg:// scheme needs),
+# and cryptography (app/models.py imports app/crypto.py's EncryptedString
+# at module load time, even though this script's own use of the ORM
+# never touches an encrypted column). Pinned to match requirements.txt
+# exactly.
 fastapi==0.115.6
 boto3==1.43.89
+# Not sqlalchemy==2.0.36 (requirements.txt's exact pin): the postgres:16-
+# alpine base's python3 apk package resolves to Python 3.14, and
+# sqlalchemy 2.0.36's declarative mapping breaks on Python 3.14 for a
+# Mapped[X | None] column (models.py uses several) - "TypeError:
+# descriptor '__getitem__' requires a 'typing.Union' object but received
+# a 'tuple'" - a real Python-3.14-vs-typing-internals incompatibility
+# fixed in a later 2.0.x release, not present on the main app's image
+# (python:3.12-slim, pinned Python 3.12). 2.0.43 is the earliest 2.0.x
+# release confirmed (by actually building and running this image) to
+# import models.py cleanly under Python 3.14.
+sqlalchemy==2.0.43
+# Not psycopg[binary]==3.2.3 (requirements.txt's exact pin): this image is
+# built FROM postgres:16-alpine (musl libc), and psycopg-binary only
+# started publishing musllinux wheels at 3.2.10 - 3.2.3 has none, so pip
+# fails outright here even though the identical pin builds fine on the
+# main app's Debian-based (glibc) image. 3.2.13 is the newest release
+# still in the same 3.2.x line as requirements.txt's pin.
+psycopg[binary]==3.2.13
+cryptography==50.0.1

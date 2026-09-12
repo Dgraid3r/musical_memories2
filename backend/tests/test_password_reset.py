@@ -99,6 +99,52 @@ def test_reset_password_too_short_rejected(client, make_user):
     assert res.status_code == 422
 
 
+def test_request_reset_wildcard_email_does_not_match_unrelated_account(client, make_user):
+    """The core fix: User.email.ilike(payload.email) treated % and _ as SQL
+    wildcards, and EmailStr doesn't reject them ("%@gmail.com" passes
+    validation as a syntactically-plausible-looking address). An attacker
+    could wildcard-match an arbitrary victim's real account this way,
+    invalidating the victim's own pending reset tokens and triggering an
+    unsolicited reset email to them. Comparing with == against the
+    normalized column instead means a wildcard pattern simply doesn't
+    equal anyone's real, literal email address.
+
+    Registering already sends victim@example.com a verification email, so
+    last_email_to for that address is never None to begin with - the
+    assertion instead confirms the wildcard request didn't append a
+    *newer* (reset) email on top of it."""
+    make_user("victim")  # email victim@example.com
+    before = last_email_to("victim@example.com")
+    assert before is not None and before["subject"].startswith("Verify your email")
+
+    res = client.post("/api/account/password-reset/request", json={"email": "%@example.com"})
+    assert res.status_code == 200  # same generic response either way - no enumeration leak
+    assert last_email_to("victim@example.com") == before
+
+
+def test_request_reset_wildcard_with_matching_literal_substring_still_does_not_match(client, make_user):
+    """A second wildcard shape - % anywhere in the local-part, not just as
+    the whole thing - proving this isn't merely "a bare % is special-
+    cased" but that ilike's wildcard semantics are gone entirely."""
+    make_user("victim")  # email victim@example.com
+    before = last_email_to("victim@example.com")
+
+    res = client.post("/api/account/password-reset/request", json={"email": "%victim@example.com"})
+    assert res.status_code == 200
+    assert last_email_to("victim@example.com") == before
+
+
+def test_request_reset_matches_regardless_of_requested_case(client, make_user):
+    """Case-insensitivity itself must still work - == against the
+    lowercase-normalized column, with the incoming value also lowered,
+    rather than relying on ilike for that job."""
+    make_user("alice")  # stored as alice@example.com (see register normalization)
+
+    res = client.post("/api/account/password-reset/request", json={"email": "ALICE@EXAMPLE.COM"})
+    assert res.status_code == 200
+    assert last_email_to("alice@example.com") is not None
+
+
 def test_request_reset_rate_limited_after_five_attempts_per_minute(client, make_user):
     make_user("alice")
     for _ in range(5):
