@@ -239,11 +239,19 @@ class JournalEntry(Base):
     # membership first. "Private" is unchanged: owner + co-authors only.
     is_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # The music side of an entry is always a Spotify playlist, even a
+    # The music side of an entry is normally a Spotify playlist, even a
     # single-song one, so there is no separate "track" reference to model.
-    playlist_id: Mapped[str] = mapped_column(String, nullable=False)
-    playlist_name: Mapped[str] = mapped_column(String, nullable=False)
-    playlist_url: Mapped[str] = mapped_column(String, nullable=False)
+    # Nullable: an offline-created draft (see frontend offlineDrafts.ts)
+    # has no network access to Spotify search at capture time, so it
+    # syncs with no playlist at all rather than blocking capture on
+    # picking one - the three columns are effectively all-or-nothing in
+    # practice (the online form still requires a playlist before
+    # submitting; only the offline-sync path ever sends none of them),
+    # but that's an application-level convention, not a DB constraint,
+    # since either path may add a playlist later via update_entry.
+    playlist_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    playlist_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    playlist_url: Mapped[str | None] = mapped_column(String, nullable=True)
     playlist_image_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Optional, user-provided location - never inferred or captured
