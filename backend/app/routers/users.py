@@ -80,9 +80,18 @@ def _try_apply_invite_on_register(invite_token: str, user: User, db: Session) ->
 @router.post("", response_model=UserOut, status_code=201)
 @limiter.limit(AUTH_RATE_LIMIT)
 def register(request: Request, payload: UserCreate, db: Session = Depends(get_db)):
+    # Normalized to lowercase here - the one place a locally-registered
+    # user's email is ever written - so every exact-match lookup elsewhere
+    # (login, password reset, Google sign-in linking, invite matching) can
+    # compare with a plain == instead of relying on ilike as a case-
+    # insensitivity workaround (see account.py/workspaces.py/invites.py/
+    # google_auth.py). Also closes a related inconsistency: without this,
+    # "Alice@x.com" and "alice@x.com" could both register as if they were
+    # different addresses, since the unique constraint on User.email is
+    # itself case-sensitive.
     user = User(
         username=payload.username,
-        email=payload.email,
+        email=payload.email.lower(),
         hashed_password=hash_password(payload.password),
     )
     db.add(user)

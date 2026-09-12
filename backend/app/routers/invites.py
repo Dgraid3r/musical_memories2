@@ -45,7 +45,10 @@ def preview_invite(token: str, db: Session = Depends(get_db)):
     and to decide whether to show a login form (account_exists) or a
     registration form."""
     invite = _get_valid_invite_or_error(token, db)
-    account_exists = db.scalar(select(User.id).where(User.email.ilike(invite.email))) is not None
+    # == (not ilike - see account.py's password-reset request for why) -
+    # invite.email is already stored lowercase (workspaces.create_invite),
+    # matching User.email's own normalization on write.
+    account_exists = db.scalar(select(User.id).where(User.email == invite.email)) is not None
     return WorkspaceInvitePreviewOut(
         workspace_id=invite.workspace_id,
         workspace_name=invite.workspace.name,

@@ -291,16 +291,23 @@ def create_invite(
     routers/invites.py), either by logging into an existing account or by
     registering a new one with this same email."""
     workspace = require_workspace_owner(workspace_id, db, current_user)
+    # Both lookups below use == (not ilike, which treats % and _ as SQL
+    # wildcards an attacker-supplied email could exploit - see
+    # account.py's password-reset request) against columns that are
+    # themselves stored lowercase (User.email in users.register/
+    # google_auth.callback; WorkspaceInvite.email a few lines below), so
+    # normalizing just this incoming value is enough for an exact,
+    # case-insensitive match.
     email = payload.email.lower()
 
-    existing_user = db.scalar(select(User).where(User.email.ilike(email)))
+    existing_user = db.scalar(select(User).where(User.email == email))
     if existing_user is not None and _get_membership(workspace_id, existing_user, db) is not None:
         raise HTTPException(status_code=409, detail="That person is already a member of this workspace")
 
     pending = db.scalar(
         select(WorkspaceInvite).where(
             WorkspaceInvite.workspace_id == workspace_id,
-            WorkspaceInvite.email.ilike(email),
+            WorkspaceInvite.email == email,
             WorkspaceInvite.accepted_at.is_(None),
             WorkspaceInvite.revoked_at.is_(None),
             WorkspaceInvite.expires_at > datetime.utcnow(),
