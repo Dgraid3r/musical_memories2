@@ -11,6 +11,8 @@ import MapView from './components/MapView'
 import MyInvites from './components/MyInvites'
 import NewEntryForm from './components/NewEntryForm'
 import NotificationBell from './components/NotificationBell'
+import OfflineDraftQueue from './components/OfflineDraftQueue'
+import OfflineEntryForm from './components/OfflineEntryForm'
 import PublicWorkspaceBrowser from './components/PublicWorkspaceBrowser'
 import ResetPasswordPage from './components/ResetPasswordPage'
 import SearchBar from './components/SearchBar'
@@ -20,7 +22,9 @@ import VerifyEmailBanner from './components/VerifyEmailBanner'
 import WorkspaceSettings from './components/WorkspaceSettings'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher'
 import type { InvitePreview, JournalEntry } from './types'
-import { useWorkspace } from './workspace/WorkspaceContext'
+import { useOfflineDrafts } from './useOfflineDrafts'
+import { useOnlineStatus } from './useOnlineStatus'
+import { ACTIVE_WORKSPACE_STORAGE_KEY, useWorkspace } from './workspace/WorkspaceContext'
 import './App.css'
 
 // Same "load more" pagination convention as PublicWorkspaceBrowser.tsx -
@@ -192,6 +196,32 @@ export default function App() {
   // - there's no logged-in follow-up action, so this alone (no setter
   // call anywhere) is enough.
   const sharedToken = useOneShotUrlParam('shared')
+
+  // --- Offline draft queue (PWA offline support) -----------------------
+  const online = useOnlineStatus()
+  const { drafts: offlineDrafts, syncing: syncingDrafts, justSynced, addDraft, syncNow } = useOfflineDrafts(
+    token,
+    (syncedEntry) => {
+      // Only splice a synced draft straight into the visible list when
+      // it belongs to the workspace currently being viewed - one synced
+      // elsewhere still exists, it just shows up correctly next time
+      // that workspace is opened instead of here.
+      if (activeWorkspace && syncedEntry.workspace_id === activeWorkspace.id && !searchQuery) {
+        setEntries((prev) => [syncedEntry, ...prev])
+      }
+    },
+  )
+  // Going offline on a fresh load means WorkspaceContext's own fetch
+  // never succeeds, so `activeWorkspace` stays null even though the id
+  // the user was last looking at is already cached in localStorage (see
+  // ACTIVE_WORKSPACE_STORAGE_KEY's own comment) - fall back to that
+  // cached id, but only while genuinely offline, so a real "no active
+  // workspace" state while online is never masked by a stale id.
+  const offlineWorkspaceId = activeWorkspace
+    ? activeWorkspace.id
+    : online
+      ? null
+      : Number(localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY)) || null
 
   useEffect(() => {
     if (authLoading || !activeWorkspace) return
@@ -413,8 +443,26 @@ export default function App() {
       {showAccountSettings && <AccountSettings onClose={() => setShowAccountSettings(false)} />}
 
       <main>
+        <OfflineDraftQueue
+          drafts={offlineDrafts}
+          syncing={syncingDrafts}
+          justSynced={justSynced}
+          online={online}
+          onSyncNow={syncNow}
+        />
+
         {workspaceLoading && <p>Loading workspaces...</p>}
-        {!workspaceLoading && workspaceError && <p className="error">{workspaceError}</p>}
+        {!workspaceLoading && workspaceError && (
+          <>
+            <p className="error">{workspaceError}</p>
+            {/* Offline on a fresh load, with no live workspace list to fall
+                back on - the cached id is still enough to let a draft be
+                captured and correctly attached once it syncs. */}
+            {!online && offlineWorkspaceId !== null && (
+              <OfflineEntryForm workspaceId={offlineWorkspaceId} onQueued={addDraft} />
+            )}
+          </>
+        )}
         {!workspaceLoading && !workspaceError && !activeWorkspace && (
           <p className="hint">
             You don't belong to a workspace yet - create one above to start adding memories.
@@ -427,12 +475,13 @@ export default function App() {
 
         {activeWorkspace && !showMapView && (
           <>
-            {canWrite && (
+            {canWrite && online && (
               <NewEntryForm
                 workspaceId={activeWorkspace.id}
                 onCreated={(entry) => setEntries((prev) => (searchQuery ? prev : [entry, ...prev]))}
               />
             )}
+            {canWrite && !online && <OfflineEntryForm workspaceId={activeWorkspace.id} onQueued={addDraft} />}
             {!canWrite && (
               <p className="hint subscriber-notice">
                 You're a subscriber here - you can read everything, but only an owner or member can add or edit
