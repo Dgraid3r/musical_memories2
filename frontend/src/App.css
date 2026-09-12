@@ -321,6 +321,32 @@ h3 {
   background: var(--accent-hover);
 }
 
+.entry-prompt-trigger {
+  align-self: flex-start;
+}
+
+.entry-prompt-suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.entry-prompt-suggestion p {
+  margin: 0;
+  font-style: italic;
+  color: var(--text);
+}
+
+.entry-prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .new-entry-form button[type='submit']:disabled {
   opacity: 0.6;
   cursor: default;
