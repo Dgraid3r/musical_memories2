@@ -23,10 +23,52 @@ from ..schemas import (
     WorkspaceTransferOwnershipInput,
     WorkspaceVisibilityUpdate,
 )
+from ..storage import get_storage
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
+
+
+def collect_workspace_image_filenames(workspace: Workspace) -> list[str]:
+    """Every stored image filename across every entry in this workspace -
+    must be read *before* the workspace (and, through the ORM's own
+    cascade="all, delete-orphan" relationships in models.py, every
+    entry/image row in it) is deleted, since there's nothing left to
+    traverse afterward. The ORM cascade only ever removes database rows;
+    it never touches the actual files those EntryImage rows pointed at,
+    so without this, every photo belonging to every entry in a deleted
+    workspace (or a cascaded sole-owned-workspace account deletion - see
+    account.delete_account) would stay orphaned in storage forever -
+    unreferenced, and still billed for if using object storage.
+
+    Used by delete_workspace below and by account.delete_account's
+    sole-owned-workspace cascade - the one shared helper both call
+    instead of duplicating this loop."""
+    return [image.filename for entry in workspace.entries for image in entry.images]
+
+
+def delete_stored_images(filenames: list[str]) -> None:
+    """Deletes each given file from whichever storage backend is
+    configured, logging (never raising) any individual failure.
+
+    Every caller runs this only *after* the corresponding database
+    delete has already committed successfully (see delete_workspace
+    below, entries.delete_entry, and account.delete_account) - by that
+    point the row is correctly gone either way, so a failure here means
+    an orphaned file: the lesser, more visible problem, and one an
+    admin can notice and clean up from the logs. The alternative
+    ordering (delete files first, then commit the database delete) risks
+    the opposite and strictly worse failure: real files deleted while
+    the database rows - and whatever redirected a user to "this worked" -
+    still exist, because the commit that was supposed to follow never
+    happened."""
+    storage = get_storage()
+    for filename in filenames:
+        try:
+            storage.delete(filename)
+        except Exception:
+            logger.error("storage.delete_failed filename=%s", filename, exc_info=True)
 
 WRITE_ROLES = ("owner", "member")
 INVITE_EXPIRE_DAYS = 7
@@ -528,8 +570,14 @@ def delete_workspace(
     """Owner-only. Cascades to every entry, tag, comment, and pending
     invite in the workspace (see the cascade="all, delete-orphan"
     relationships in models.py) - this is genuinely destructive and
-    irreversible."""
+    irreversible. Every entry's stored photo files are explicitly
+    deleted too (see collect_workspace_image_filenames/
+    delete_stored_images above) - the ORM cascade alone would silently
+    orphan them in storage forever, since it only ever removes database
+    rows."""
     workspace = require_workspace_owner(workspace_id, db, current_user)
+    image_filenames = collect_workspace_image_filenames(workspace)
     db.delete(workspace)
     db.commit()
+    delete_stored_images(image_filenames)
     logger.warning("workspace.deleted workspace_id=%s by=%s", workspace_id, current_user.id)

@@ -21,6 +21,7 @@ from ..schemas import (
     PasswordResetRequestOut,
     UserOut,
 )
+from .workspaces import collect_workspace_image_filenames, delete_stored_images
 
 logger = logging.getLogger(__name__)
 
@@ -226,8 +227,15 @@ def delete_account(
 
     # Safe to cascade - the caller is the only member, so deleting the
     # workspace deletes only their own content (Workspace.memberships/
-    # entries/tags/invites all cascade="all, delete-orphan").
+    # entries/tags/invites all cascade="all, delete-orphan"). Each
+    # workspace's stored photo files are collected now, while the ORM
+    # relationships are still there to read, and actually deleted from
+    # storage after a successful commit below (see
+    # workspaces.delete_stored_images) - the ORM cascade alone would
+    # silently orphan them, since it only ever removes database rows.
+    image_filenames: list[str] = []
     for workspace in solely_owned_workspaces:
+        image_filenames.extend(collect_workspace_image_filenames(workspace))
         db.delete(workspace)
 
     # Every remaining membership (non-owner roles, or owner roles already
@@ -263,5 +271,6 @@ def delete_account(
     current_user.deleted_at = datetime.utcnow()
 
     db.commit()
+    delete_stored_images(image_filenames)
     logger.warning("account.deleted user_id=%s", current_user.id)
     return AccountDeleteOut(detail="Your account has been permanently deleted.")

@@ -258,6 +258,43 @@ def test_sole_owner_and_only_member_cascades_workspace_cleanly(client, make_user
     finally:
         db.close()
 
+
+def test_sole_owner_cascade_removes_uploaded_photo_files(client, make_user, make_workspace, db_session):
+    """The sole-owned-workspace cascade (see delete_account's own
+    comment) only ever removes database rows through the ORM - without
+    explicit cleanup, every photo on every entry in that workspace would
+    stay orphaned in storage forever. See
+    workspaces.collect_workspace_image_filenames/delete_stored_images."""
+    from pathlib import Path
+
+    from app.models import EntryImage
+
+    uploads_dir = Path(__file__).resolve().parent.parent / "uploads"
+
+    alice = make_user("alice")
+    ws = make_workspace(alice, name="Just Alice")
+    create_res = client.post(
+        f"/api/workspaces/{ws['id']}/entries",
+        headers=alice["headers"],
+        data={
+            "start_date": "2026-01-01",
+            "playlist_id": "p1",
+            "playlist_name": "Test",
+            "playlist_url": "https://open.spotify.com/playlist/p1",
+            "is_public": "false",
+        },
+        files=[("images", ("photo.png", b"fake image bytes", "image/png"))],
+    )
+    assert create_res.status_code == 201, create_res.text
+    image_id = create_res.json()["images"][0]["id"]
+    saved_path = uploads_dir / db_session.get(EntryImage, image_id).filename
+    assert saved_path.exists()
+
+    res = _delete_account(client, alice["headers"])
+    assert res.status_code == 200
+
+    assert not saved_path.exists()
+
     # And nothing errored - user row itself still exists, anonymized.
     row = _get_user_row(alice["id"])
     assert row is not None
