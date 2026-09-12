@@ -423,6 +423,59 @@ class PasswordResetToken(Base):
     user: Mapped["User"] = relationship(back_populates="password_reset_tokens")
 
 
+class Notification(Base):
+    """An in-app notification for one user - created when someone comments
+    on their entry, or when a workspace invite lands on their existing
+    account (see routers/comments.py's create_comment and
+    routers/workspaces.py's create_invite for where these get created;
+    an email is sent alongside the comment one via app/email.py's
+    send_email - the invite email already existed and isn't duplicated
+    here).
+
+    Deliberately generic - a `type` string plus a pre-rendered plain-text
+    `message`, rather than a dedicated table or dedicated columns per
+    notification kind - specifically so a future notification type (e.g.
+    an "on this day" reminder) can reuse this same table, the same list/
+    mark-read endpoints, and the same frontend bell/panel, without a
+    schema rework. `type` is deliberately not constrained by a
+    CheckConstraint the way WorkspaceInvite.role/WorkspaceMembership.role
+    are - adding a new type here should be a pure application-level
+    change, never a migration, which is the whole point of building this
+    generically now.
+
+    `entry_id`/`workspace_id` are the notification-kind-specific context
+    (which entry got the comment; which workspace issued the invite) -
+    both nullable since not every notification type will need either,
+    and both ON DELETE SET NULL rather than CASCADE: if the entry or
+    workspace a notification pointed to is later deleted, the
+    notification itself survives - `message` is still a valid, readable
+    historical record ("Alice commented on your entry") even once it
+    stops being a clickable link to anything.
+
+    `read_at` is the same nullable-timestamp-as-marker pattern already
+    used by WorkspaceInvite.revoked_at/accepted_at and
+    PasswordResetToken.used_at - null means unread."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    message: Mapped[str] = mapped_column(String, nullable=False)
+    entry_id: Mapped[int | None] = mapped_column(
+        ForeignKey("journal_entries.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship()
+    entry: Mapped["JournalEntry | None"] = relationship()
+    workspace: Mapped["Workspace | None"] = relationship()
+
+
 class BackupRun(Base):
     """One row per scripts/backup_database.py attempt, success or
     failure - written by that script itself at the end of every run (see

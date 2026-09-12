@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..database import get_db
 from ..email import send_email
-from ..models import JournalEntry, User, Workspace, WorkspaceInvite, WorkspaceMembership
+from ..models import JournalEntry, Notification, User, Workspace, WorkspaceInvite, WorkspaceMembership
 from ..schemas import (
     PublicWorkspaceOut,
     WorkspaceCreate,
@@ -367,6 +367,22 @@ def create_invite(
         expires_at=datetime.utcnow() + timedelta(days=INVITE_EXPIRE_DAYS),
     )
     db.add(invite)
+    # The invite email (below) always goes out regardless of whether this
+    # email belongs to an existing account - that's the only notice a
+    # brand-new invitee (no account yet) can get. An in-app Notification
+    # is additionally created only when it does belong to an existing
+    # account (existing_user, already looked up above) - a would-be
+    # invitee with no account yet has nowhere to see an in-app
+    # notification in the first place.
+    if existing_user is not None:
+        db.add(
+            Notification(
+                user_id=existing_user.id,
+                type="invite",
+                message=f'{current_user.username} invited you to join "{workspace.name}".',
+                workspace_id=workspace_id,
+            )
+        )
     db.commit()
     db.refresh(invite)
 

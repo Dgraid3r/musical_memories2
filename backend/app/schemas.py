@@ -328,6 +328,30 @@ class WorkspaceInvitePreviewOut(BaseModel):
     account_exists: bool
 
 
+class MyPendingInviteOut(BaseModel):
+    """One row of GET /api/invites - every invite currently pending for
+    the *caller's own* email, so a logged-in user has somewhere to see
+    (and act on) an invite beyond just the emailed link. Unlike
+    WorkspaceInviteOut above (what a workspace owner sees for invites
+    *they sent*, which deliberately never includes the token), this one
+    does include it: the query behind this endpoint is already scoped to
+    "invites addressed to my own authenticated account's email", so the
+    token isn't protecting anything further here - the frontend needs it
+    to call POST /api/invites/{token}/accept directly.
+
+    Built manually in the router (workspace_name/inviter_username come
+    from the invite's related Workspace/User rows, not columns on the
+    WorkspaceInvite row itself) rather than via from_attributes."""
+
+    token: str
+    workspace_id: int
+    workspace_name: str
+    role: str
+    inviter_username: str
+    created_at: datetime
+    expires_at: datetime
+
+
 class EmailVerificationResendOut(BaseModel):
     detail: str
 
@@ -428,3 +452,36 @@ class AdminStatsOut(BaseModel):
     # None means no backup has ever run yet (e.g. a brand new
     # deployment) - distinct from a run that happened and failed.
     latest_backup: BackupStatusOut | None
+
+
+class NotificationOut(BaseModel):
+    """One row of GET /api/notifications - see models.Notification for why
+    this is deliberately generic (a `type` string plus a pre-rendered
+    `message`) rather than one shape per notification kind. `entry_id`/
+    `workspace_id` are None either when this notification's type never
+    had one to begin with, or once the entry/workspace it pointed to was
+    later deleted (ON DELETE SET NULL - see the model) - either way, the
+    frontend just has nothing left to link to. `read_at` being None means
+    unread, the same marker convention used everywhere else in this app."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    type: str
+    message: str
+    entry_id: int | None
+    workspace_id: int | None
+    read_at: datetime | None
+    created_at: datetime
+
+
+class NotificationActionOut(BaseModel):
+    detail: str
+
+
+class UnreadNotificationCountOut(BaseModel):
+    """Powers the bell icon's unread badge - a plain count, so the
+    frontend doesn't have to fetch every notification just to count how
+    many are unread."""
+
+    count: int
