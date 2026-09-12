@@ -23,12 +23,14 @@ services:
   # start it explicitly with `docker compose --profile backup up -d`.
   # Scheduling here is deliberately a simple sleep loop, not real cron;
   # see run_backup_daily.sh and the README for how to adapt this once
-  # real hosting is chosen.
+  # real hosting is chosen. Shares its image (Dockerfile.backup) with
+  # the on-this-day service below - see that file's own header comment.
   backup:
     profiles: ["backup"]
     build:
       context: ./backend
       dockerfile: Dockerfile.backup
+    entrypoint: ["scripts/run_backup_daily.sh"]
     env_file:
       - path: ./backend/.env
         required: false
@@ -47,6 +49,37 @@ services:
       # still just a smoke test of the mechanism, per the script's own
       # docstring, not real off-machine protection.
       - ./backend/backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Daily "on this day" reminder notifications (see
+  # backend/scripts/send_on_this_day_reminders.py) - reuses the
+  # in-app-notification + email system built for comments/invites
+  # (app/routers/notifications.py, app/email.py), never a second
+  # delivery mechanism. Same opt-in-via-profile shape as `backup` above
+  # (start with `docker compose --profile on-this-day up -d`), and the
+  # same simple-sleep-loop scheduling
+  # (run_on_this_day_reminders_daily.sh) - the script itself is
+  # idempotent per user per real calendar day, so re-running it (this
+  # loop's own daily cadence, or a container restart) is always safe.
+  on-this-day:
+    profiles: ["on-this-day"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backup
+    entrypoint: ["scripts/run_on_this_day_reminders_daily.sh"]
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      # Same reasoning as `backup` above - this container reaches
+      # Postgres over the compose network, not backend/.env's
+      # dev-machine `localhost` value. SMTP_*/ON_THIS_DAY_INTERVAL_SECONDS/
+      # SENTRY_DSN/LOG_LEVEL come from backend/.env unchanged, when it
+      # exists.
+      DATABASE_URL: postgresql+psycopg://musical_memories:musical_memories@postgres:5432/musical_memories
     depends_on:
       postgres:
         condition: service_healthy
