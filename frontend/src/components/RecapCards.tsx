@@ -78,14 +78,20 @@ export default function RecapCards({ recap, heading }: Props) {
             <div className="recap-bookend">
               <p className="recap-card-caption">The year began</p>
               <p className="recap-bookend-date">{formatDate(recap.first_entry.start_date)}</p>
-              <p className="recap-bookend-playlist">{recap.first_entry.playlist_name}</p>
+              {/* No playlist yet on an entry synced from an offline draft -
+                  see JournalEntry.playlist_name's own comment. */}
+              {recap.first_entry.playlist_name && (
+                <p className="recap-bookend-playlist">{recap.first_entry.playlist_name}</p>
+              )}
             </div>
           )}
           {recap.last_entry && (
             <div className="recap-bookend">
               <p className="recap-card-caption">...and closed</p>
               <p className="recap-bookend-date">{formatDate(recap.last_entry.start_date)}</p>
-              <p className="recap-bookend-playlist">{recap.last_entry.playlist_name}</p>
+              {recap.last_entry.playlist_name && (
+                <p className="recap-bookend-playlist">{recap.last_entry.playlist_name}</p>
+              )}
             </div>
           )}
         </section>

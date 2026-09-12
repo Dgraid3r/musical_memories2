@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { addImages, disableEntrySharing, enableEntrySharing, updateEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
-import type { EntryLocation, JournalEntry } from '../types'
+import type { EntryLocation, JournalEntry, PlaylistResult } from '../types'
 import CommentThread from './CommentThread'
 import EntryEditHistory from './EntryEditHistory'
 import EntryPhoto from './EntryPhoto'
 import LocationPicker from './LocationPicker'
+import PlaylistSearch from './PlaylistSearch'
 import TagInput from './TagInput'
 
 interface Props {
@@ -44,6 +45,9 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
   const [editingLocation, setEditingLocation] = useState(false)
   const [savingLocation, setSavingLocation] = useState(false)
   const [draftLocation, setDraftLocation] = useState<EntryLocation | null>(null)
+  const [addingPlaylist, setAddingPlaylist] = useState(false)
+  const [draftPlaylist, setDraftPlaylist] = useState<PlaylistResult | null>(null)
+  const [savingPlaylist, setSavingPlaylist] = useState(false)
   const [showSharePanel, setShowSharePanel] = useState(false)
   const [shareLink, setShareLink] = useState<string | null>(null)
   const [shareBusy, setShareBusy] = useState(false)
@@ -149,6 +153,19 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
       setEditingLocation(false)
     } finally {
       setSavingLocation(false)
+    }
+  }
+
+  async function savePlaylist() {
+    if (!token || !draftPlaylist) return
+    setSavingPlaylist(true)
+    try {
+      const updated = await updateEntry(workspaceId, entry.id, { playlist: draftPlaylist }, token)
+      onUpdated(updated)
+      setAddingPlaylist(false)
+      setDraftPlaylist(null)
+    } finally {
+      setSavingPlaylist(false)
     }
   }
 
@@ -294,15 +311,48 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
         </label>
       )}
 
-      <iframe
-        title={entry.playlist_name}
-        src={`https://open.spotify.com/embed/playlist/${entry.playlist_id}`}
-        width="100%"
-        height="152"
-        style={{ borderRadius: 12 }}
-        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-        loading="lazy"
-      />
+      {entry.playlist_id ? (
+        <iframe
+          title={entry.playlist_name ?? undefined}
+          src={`https://open.spotify.com/embed/playlist/${entry.playlist_id}`}
+          width="100%"
+          height="152"
+          style={{ borderRadius: 12 }}
+          allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+          loading="lazy"
+        />
+      ) : addingPlaylist ? (
+        <div className="tag-edit">
+          <PlaylistSearch selected={draftPlaylist} onSelect={setDraftPlaylist} />
+          <div className="tag-edit-actions">
+            <button type="button" onClick={savePlaylist} disabled={savingPlaylist || !draftPlaylist}>
+              {savingPlaylist ? 'Saving...' : 'Save playlist'}
+            </button>
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                setAddingPlaylist(false)
+                setDraftPlaylist(null)
+              }}
+              disabled={savingPlaylist}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        // No playlist yet - true for every entry synced from an offline
+        // draft (see offlineDrafts.ts) until someone picks one here.
+        canEditContent && (
+          <p className="hint no-playlist-hint">
+            No playlist yet.{' '}
+            <button type="button" className="link-btn" onClick={() => setAddingPlaylist(true)}>
+              + Add playlist
+            </button>
+          </p>
+        )
+      )}
 
       <CommentThread workspaceId={workspaceId} entryId={entry.id} entryOwnerId={entry.user_id} canWrite={canWrite} />
       <EntryEditHistory workspaceId={workspaceId} entryId={entry.id} />

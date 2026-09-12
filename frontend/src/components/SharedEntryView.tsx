@@ -94,15 +94,17 @@ export default function SharedEntryView({ token }: Props) {
               </div>
             )}
 
-            <iframe
-              title={entry.playlist_name}
-              src={`https://open.spotify.com/embed/playlist/${entry.playlist_id}`}
-              width="100%"
-              height="152"
-              style={{ borderRadius: 12 }}
-              allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-              loading="lazy"
-            />
+            {entry.playlist_id && (
+              <iframe
+                title={entry.playlist_name ?? undefined}
+                src={`https://open.spotify.com/embed/playlist/${entry.playlist_id}`}
+                width="100%"
+                height="152"
+                style={{ borderRadius: 12 }}
+                allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                loading="lazy"
+              />
+            )}
           </article>
         )}
       </main>

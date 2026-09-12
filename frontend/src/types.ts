@@ -22,9 +22,14 @@ export interface JournalEntry {
   end_date: string
   text: string | null
   is_public: boolean
-  playlist_id: string
-  playlist_name: string
-  playlist_url: string
+  // All three null together - an offline-created draft (see
+  // offlineDrafts.ts) syncs with no playlist at all, since picking one
+  // needs Spotify search, which needs a connection the draft didn't have
+  // when it was captured. Addable afterward via updateEntry's `playlist`
+  // option.
+  playlist_id: string | null
+  playlist_name: string | null
+  playlist_url: string | null
   playlist_image_url: string | null
   created_at: string
   images: EntryImage[]
@@ -50,9 +55,9 @@ export interface SharedEntry {
   start_date: string
   end_date: string
   text: string | null
-  playlist_id: string
-  playlist_name: string
-  playlist_url: string
+  playlist_id: string | null
+  playlist_name: string | null
+  playlist_url: string | null
   playlist_image_url: string | null
   latitude: number | null
   longitude: number | null
@@ -187,7 +192,9 @@ export interface RecapPlaylistCount {
 // deliberately never text or photos, see backend schemas.WorkspaceRecapOut.
 export interface RecapEntryHighlight {
   start_date: string
-  playlist_name: string
+  // Null when this entry has no playlist yet - see JournalEntry's own
+  // playlist_name comment.
+  playlist_name: string | null
   playlist_image_url: string | null
 }
 

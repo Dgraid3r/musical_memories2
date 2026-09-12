@@ -334,3 +334,63 @@ def test_shared_recap_image_bytes_never_appear(client, make_user, make_workspace
     res = client.get(f"/api/shared-recap/{token}")
     assert b"unique-photo-bytes-marker" not in res.content
     assert res.json()["photo_count"] == 1
+
+
+# --- Interaction with playlist-less entries (offline drafts) -----------
+
+
+def _create_entry_without_playlist(client, workspace_id, headers, *, start_date, text="an offline draft"):
+    res = client.post(
+        f"/api/workspaces/{workspace_id}/entries",
+        headers=headers,
+        data={"start_date": start_date, "text": text, "is_public": "false"},
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_recap_handles_entry_with_no_playlist_as_first_and_last(client, make_user, make_workspace):
+    """An entry synced from an offline draft has no playlist at all -
+    the recap must still be able to name it as the year's first/last
+    entry rather than erroring."""
+    alice = make_user("alice")
+    ws = make_workspace(alice, name="Solo")
+    _create_entry_without_playlist(client, ws["id"], alice["headers"], start_date="2026-01-01")
+
+    res = client.get(f"/api/workspaces/{ws['id']}/recap/2026", headers=alice["headers"])
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["entry_count"] == 1
+    assert body["first_entry"] == {"start_date": "2026-01-01", "playlist_name": None, "playlist_image_url": None}
+    assert body["last_entry"] == body["first_entry"]
+
+
+def test_recap_excludes_playlistless_entries_from_top_playlists(client, make_user, make_workspace):
+    """Multiple entries with no playlist must never be counted together
+    as if "no playlist" were itself a repeated playlist."""
+    alice = make_user("alice")
+    ws = make_workspace(alice, name="Solo")
+    _create_entry_without_playlist(client, ws["id"], alice["headers"], start_date="2026-02-01")
+    _create_entry_without_playlist(client, ws["id"], alice["headers"], start_date="2026-03-01")
+    _create_entry_without_playlist(client, ws["id"], alice["headers"], start_date="2026-04-01")
+
+    res = client.get(f"/api/workspaces/{ws['id']}/recap/2026", headers=alice["headers"])
+    assert res.status_code == 200, res.text
+    assert res.json()["top_playlists"] == []
+
+
+def test_recap_top_playlists_still_correct_alongside_playlistless_entries(client, make_user, make_workspace):
+    alice = make_user("alice")
+    ws = make_workspace(alice, name="Solo")
+    _create_entry_without_playlist(client, ws["id"], alice["headers"], start_date="2026-01-01")
+    _create_entry_without_playlist(client, ws["id"], alice["headers"], start_date="2026-02-01")
+    _create_entry(client, ws["id"], alice["headers"], start_date="2026-03-01", playlist_id="p1")
+    _create_entry(client, ws["id"], alice["headers"], start_date="2026-03-15", playlist_id="p1")
+
+    res = client.get(f"/api/workspaces/{ws['id']}/recap/2026", headers=alice["headers"])
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["entry_count"] == 4
+    assert len(body["top_playlists"]) == 1
+    assert body["top_playlists"][0]["playlist_id"] == "p1"
+    assert body["top_playlists"][0]["count"] == 2

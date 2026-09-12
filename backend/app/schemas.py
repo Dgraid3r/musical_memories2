@@ -60,9 +60,14 @@ class JournalEntryOut(BaseModel):
     end_date: date
     text: str | None
     is_public: bool
-    playlist_id: str
-    playlist_name: str
-    playlist_url: str
+    # All three null together - an offline-created draft (see the PWA
+    # offline-drafts feature) syncs with no playlist at all, since
+    # picking one needs Spotify search, which needs a connection the
+    # draft didn't have when it was captured. Addable afterward via
+    # JournalEntryUpdate.playlist below.
+    playlist_id: str | None
+    playlist_name: str | None
+    playlist_url: str | None
     playlist_image_url: str | None
     created_at: datetime
     images: list[EntryImageOut]
@@ -106,6 +111,20 @@ class EntryLocationInput(BaseModel):
     location_name: str = Field(min_length=1, max_length=255)
 
 
+class EntryPlaylistInput(BaseModel):
+    """Only ever used to *set* a playlist (see JournalEntryUpdate.playlist
+    below) - never to clear one back to nothing, unlike location, since
+    there's no real-world reason to remove an entry's playlist once it
+    has one. Mirrors exactly what's actually persisted on JournalEntry -
+    not schemas.PlaylistResult, which also carries owner/track_count
+    that this entry never stores."""
+
+    playlist_id: str = Field(min_length=1)
+    playlist_name: str = Field(min_length=1)
+    playlist_url: str = Field(min_length=1)
+    playlist_image_url: str | None = None
+
+
 class JournalEntryUpdate(BaseModel):
     text: str | None = None
     is_public: bool | None = None
@@ -121,6 +140,11 @@ class JournalEntryUpdate(BaseModel):
     # `"location" in payload.model_fields_set`: absent entirely = leave
     # unchanged, present as JSON null = clear, present as an object = set.
     location: EntryLocationInput | None = None
+    # Sets (never clears - see EntryPlaylistInput) the playlist on an
+    # entry that doesn't have one yet, most notably an offline-created
+    # draft once it's synced. Content, like text/tags - any co-author
+    # with content-edit rights may set this, not just the primary author.
+    playlist: EntryPlaylistInput | None = None
 
 
 class EntryShareOut(BaseModel):
@@ -145,9 +169,9 @@ class SharedEntryOut(BaseModel):
     start_date: date
     end_date: date
     text: str | None
-    playlist_id: str
-    playlist_name: str
-    playlist_url: str
+    playlist_id: str | None
+    playlist_name: str | None
+    playlist_url: str | None
     playlist_image_url: str | None
     latitude: float | None
     longitude: float | None
@@ -322,7 +346,11 @@ class RecapPlaylistCount(BaseModel):
     """A playlist referenced by more than one entry in the recapped year -
     see WorkspaceRecapOut.top_playlists, which is simply empty when no
     playlist repeats (a small workspace's every entry using a different
-    playlist is a completely normal, ungraded outcome, not an error)."""
+    playlist is a completely normal, ungraded outcome, not an error).
+    Entries with no playlist at all (see models.JournalEntry's comment)
+    are never counted here - "no playlist" isn't a playlist that can be
+    most-referenced, so those entries are excluded from this stat
+    entirely rather than being grouped together as if they shared one."""
 
     playlist_id: str
     playlist_name: str
@@ -338,7 +366,10 @@ class RecapEntryHighlight(BaseModel):
     side door."""
 
     start_date: date
-    playlist_name: str
+    # Null when this entry has no playlist yet - true for any entry
+    # synced from an offline draft (see models.JournalEntry's comment on
+    # playlist_id/name/url) until someone adds one via the edit form.
+    playlist_name: str | None
     playlist_image_url: str | None
 
 

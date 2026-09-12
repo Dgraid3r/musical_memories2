@@ -3,7 +3,13 @@ import { createWorkspace as apiCreateWorkspace, fetchWorkspaces } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import type { Workspace } from '../types'
 
-const ACTIVE_WORKSPACE_STORAGE_KEY = 'musical_memories_active_workspace'
+// Exported (not just module-private) so the offline-drafts feature can
+// read the cached id directly - see App.tsx/useOfflineDrafts.ts. Going
+// offline on a fresh load means fetchWorkspaces() below never succeeds,
+// so `activeWorkspace` itself stays null even though the *id* the user
+// was last looking at is already sitting right here in localStorage;
+// that's the "already persisted somewhere" this key is.
+export const ACTIVE_WORKSPACE_STORAGE_KEY = 'musical_memories_active_workspace'
 
 interface WorkspaceContextValue {
   workspaces: Workspace[]

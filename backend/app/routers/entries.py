@@ -394,9 +394,15 @@ def create_entry(
     start_date: date = Form(...),
     end_date: date | None = Form(None),
     text: str | None = Form(None),
-    playlist_id: str = Form(...),
-    playlist_name: str = Form(...),
-    playlist_url: str = Form(...),
+    # Optional - see models.JournalEntry's comment on why. The online
+    # form still always sends all three (NewEntryForm.tsx refuses to
+    # submit without a picked playlist); only a synced offline draft
+    # (offlineDrafts.ts, which never had network access to search
+    # Spotify) omits them, and can add a playlist afterward via
+    # PATCH .../entries/{id}'s `playlist` field.
+    playlist_id: str | None = Form(None),
+    playlist_name: str | None = Form(None),
+    playlist_url: str | None = Form(None),
     playlist_image_url: str | None = Form(None),
     is_public: bool = Form(False),
     coauthor_usernames: list[str] = Form(default=[]),
@@ -419,6 +425,9 @@ def create_entry(
 
     if (latitude is None) != (longitude is None):
         raise HTTPException(status_code=422, detail="latitude and longitude must be provided together")
+
+    if not (playlist_id and playlist_name and playlist_url) and any((playlist_id, playlist_name, playlist_url)):
+        raise HTTPException(status_code=422, detail="playlist_id, playlist_name, and playlist_url must be provided together")
 
     entry = JournalEntry(
         workspace_id=workspace_id,
@@ -516,6 +525,23 @@ def update_entry(
             if new_location != (entry.latitude, entry.longitude, entry.location_name):
                 entry.latitude, entry.longitude, entry.location_name = new_location
                 changed_fields.append("location")
+
+    # Playlist is content, like text/tags - most relevant for an offline-
+    # created draft (see models.JournalEntry's comment) that synced with
+    # none at all and is now being completed. Only ever sets one - see
+    # schemas.EntryPlaylistInput on why there's no "clear" path here the
+    # way location has.
+    if payload.playlist is not None:
+        new_playlist = (
+            payload.playlist.playlist_id,
+            payload.playlist.playlist_name,
+            payload.playlist.playlist_url,
+            payload.playlist.playlist_image_url,
+        )
+        current_playlist = (entry.playlist_id, entry.playlist_name, entry.playlist_url, entry.playlist_image_url)
+        if new_playlist != current_playlist:
+            entry.playlist_id, entry.playlist_name, entry.playlist_url, entry.playlist_image_url = new_playlist
+            changed_fields.append("playlist")
 
     # Visibility and co-author management stay primary-author-only, even for
     # a co-author who otherwise has content-edit rights on this entry.

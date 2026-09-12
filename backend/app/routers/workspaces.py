@@ -726,6 +726,14 @@ def _compute_recap_stats(workspace_id: int, year: int, db: Session) -> Workspace
 
     playlist_stats: dict[str, dict] = {}
     for entry in entries:
+        # An entry with no playlist yet (e.g. synced from an offline
+        # draft - see models.JournalEntry's comment) has nothing to
+        # count here: "no playlist" isn't itself a playlist that can be
+        # most-referenced, and grouping every playlist-less entry
+        # together under one None key would wrongly report them as all
+        # sharing "the same" playlist.
+        if entry.playlist_id is None:
+            continue
         stat = playlist_stats.setdefault(
             entry.playlist_id,
             {"name": entry.playlist_name, "image_url": entry.playlist_image_url, "count": 0},
