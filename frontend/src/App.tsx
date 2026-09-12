@@ -20,6 +20,10 @@ import type { InvitePreview, JournalEntry } from './types'
 import { useWorkspace } from './workspace/WorkspaceContext'
 import './App.css'
 
+// Same "load more" pagination convention as PublicWorkspaceBrowser.tsx -
+// same page size, same hasMore-from-a-short-page derivation.
+const ENTRIES_PAGE_SIZE = 20
+
 function useSpotifyCallbackNotice(): string | null {
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -106,6 +110,8 @@ export default function App() {
     useWorkspace()
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showPublicBrowser, setShowPublicBrowser] = useState(false)
@@ -174,11 +180,32 @@ export default function App() {
   useEffect(() => {
     if (authLoading || !activeWorkspace) return
     setLoading(true)
-    fetchEntries(activeWorkspace.id, token, { q: searchQuery || undefined })
-      .then(setEntries)
+    fetchEntries(activeWorkspace.id, token, { q: searchQuery || undefined, limit: ENTRIES_PAGE_SIZE, offset: 0 })
+      .then((page) => {
+        setEntries(page)
+        setHasMore(page.length === ENTRIES_PAGE_SIZE)
+      })
       .catch(() => setError('Could not load memories.'))
       .finally(() => setLoading(false))
   }, [token, authLoading, activeWorkspace, searchQuery])
+
+  async function loadMoreEntries() {
+    if (!activeWorkspace) return
+    setLoadingMore(true)
+    try {
+      const page = await fetchEntries(activeWorkspace.id, token, {
+        q: searchQuery || undefined,
+        limit: ENTRIES_PAGE_SIZE,
+        offset: entries.length,
+      })
+      setEntries((prev) => [...prev, ...page])
+      setHasMore(page.length === ENTRIES_PAGE_SIZE)
+    } catch {
+      setHasMore(false)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   // Runs after the map closes and the (unfiltered, already-loaded) list is
   // showing again - the target entry is almost certainly already in
@@ -371,6 +398,11 @@ export default function App() {
                   onUpdated={handleUpdated}
                 />
               ))}
+              {!loading && hasMore && (
+                <button type="button" className="link-btn" onClick={loadMoreEntries} disabled={loadingMore}>
+                  {loadingMore ? 'Loading...' : 'Load more'}
+                </button>
+              )}
             </section>
           </>
         )}

@@ -14,6 +14,16 @@ interface Props {
   onViewEntry: (entryId: number) => void
 }
 
+// The entry list is paginated (see api.ts's EntrySearchParams), but the
+// map wants every located entry at once to plot as a pin, not one page
+// of them - there's no "load more" concept for a map. Requesting the
+// backend's own max page size is a pragmatic bound rather than true
+// unlimited pagination (fetching every page in a loop): a workspace
+// with more located entries than this would only show the most recent
+// MAP_ENTRIES_LIMIT of them on the map, which is an acceptable
+// personal-scale tradeoff for now rather than added complexity here.
+const MAP_ENTRIES_LIMIT = 100
+
 type LocatedEntry = JournalEntry & { latitude: number; longitude: number }
 
 function isLocated(entry: JournalEntry): entry is LocatedEntry {
@@ -122,7 +132,7 @@ export default function MapView({ workspaceId, onViewEntry }: Props) {
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetchEntries(workspaceId, token, { locatedOnly: true })
+    fetchEntries(workspaceId, token, { locatedOnly: true, limit: MAP_ENTRIES_LIMIT })
       .then(setEntries)
       .catch(() => setError('Could not load located memories.'))
       .finally(() => setLoading(false))

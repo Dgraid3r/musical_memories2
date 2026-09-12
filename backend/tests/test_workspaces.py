@@ -1,3 +1,8 @@
+from pathlib import Path
+
+UPLOADS_DIR = Path(__file__).resolve().parent.parent / "uploads"
+
+
 def _create_entry(client, workspace_id, headers, *, is_public=False, playlist_id="p1", text="hello"):
     res = client.post(
         f"/api/workspaces/{workspace_id}/entries",
@@ -117,6 +122,39 @@ def test_delete_workspace_cascades_entries_and_comments(client, make_user, make_
     # non-disclosure pattern as any other now-inaccessible resource).
     res = client.patch(f"/api/comments/{comment_id}", headers=alice["headers"], json={"body": "x"})
     assert res.status_code == 404
+
+
+def test_delete_workspace_removes_uploaded_photo_files(client, make_user, make_workspace, db_session):
+    """The ORM cascade (see models.py's cascade="all, delete-orphan"
+    relationships) only ever removes database rows - without explicit
+    cleanup, every photo on every entry in a deleted workspace would
+    stay orphaned on disk (or in object storage) forever. See
+    workspaces.collect_workspace_image_filenames/delete_stored_images."""
+    from app.models import EntryImage
+
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    create_res = client.post(
+        f"/api/workspaces/{ws['id']}/entries",
+        headers=alice["headers"],
+        data={
+            "start_date": "2026-01-01",
+            "playlist_id": "p1",
+            "playlist_name": "Test",
+            "playlist_url": "https://open.spotify.com/playlist/p1",
+            "is_public": "false",
+        },
+        files=[("images", ("photo.png", b"fake image bytes", "image/png"))],
+    )
+    assert create_res.status_code == 201, create_res.text
+    image_id = create_res.json()["images"][0]["id"]
+    saved_path = UPLOADS_DIR / db_session.get(EntryImage, image_id).filename
+    assert saved_path.exists()
+
+    res = client.delete(f"/api/workspaces/{ws['id']}", headers=alice["headers"])
+    assert res.status_code == 204
+
+    assert not saved_path.exists()
 
 
 def test_workspace_not_found_returns_404(client, make_user):

@@ -288,6 +288,28 @@ def test_edit_comment_in_workspace_caller_is_not_a_member_of_returns_404(client,
     assert res.status_code == 404
 
 
+def test_demoted_subscriber_cannot_edit_own_old_comment(client, make_user, make_workspace):
+    """A subscriber is meant to be read-only (see models.WorkspaceMembership's
+    role docstring) - a member demoted after posting a comment must not
+    keep standing rewrite power over it forever, which would otherwise
+    let a subscriber actively edit content through their own back
+    catalog. Editing requires *currently* holding write access, not just
+    having held it at post time (see update_comment)."""
+    alice = make_user("alice")
+    bob = make_user("bob")
+    ws = make_workspace(alice, bob)
+    entry_id = _create_entry(client, ws["id"], alice["headers"], is_public=True)
+    comment_id = _comment(client, ws["id"], entry_id, bob["headers"], body="bob's comment").json()["id"]
+
+    demote_res = client.patch(
+        f"/api/workspaces/{ws['id']}/members/{bob['id']}", headers=alice["headers"], json={"role": "subscriber"}
+    )
+    assert demote_res.status_code == 200
+
+    res = client.patch(f"/api/comments/{comment_id}", headers=bob["headers"], json={"body": "edited after demotion"})
+    assert res.status_code == 403
+
+
 # --- Delete permission matrix ---------------------------------------------
 
 
@@ -353,6 +375,27 @@ def test_delete_nonexistent_comment_returns_404(client, make_user):
     alice = make_user("alice")
     res = client.delete("/api/comments/999999", headers=alice["headers"])
     assert res.status_code == 404
+
+
+def test_demoted_subscriber_can_still_delete_own_old_comment(client, make_user, make_workspace):
+    """Deliberately different from editing (see
+    test_demoted_subscriber_cannot_edit_own_old_comment above) - deleting
+    your own comment is not gated on currently holding write access.
+    Retracting your own words isn't a write privilege in the same sense
+    actively rewriting them is (see delete_comment's own comment)."""
+    alice = make_user("alice")
+    bob = make_user("bob")
+    ws = make_workspace(alice, bob)
+    entry_id = _create_entry(client, ws["id"], alice["headers"], is_public=True)
+    comment_id = _comment(client, ws["id"], entry_id, bob["headers"], body="bob's comment").json()["id"]
+
+    demote_res = client.patch(
+        f"/api/workspaces/{ws['id']}/members/{bob['id']}", headers=alice["headers"], json={"role": "subscriber"}
+    )
+    assert demote_res.status_code == 200
+
+    res = client.delete(f"/api/comments/{comment_id}", headers=bob["headers"])
+    assert res.status_code == 204
 
 
 def test_delete_comment_in_workspace_caller_is_not_a_member_of_returns_404(client, make_user, make_workspace):

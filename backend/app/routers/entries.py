@@ -5,18 +5,31 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
 from ..models import EntryEditEvent, EntryImage, JournalEntry, Tag, User, WorkspaceMembership
 from ..schemas import EntryEditEventOut, JournalEntryOut, JournalEntryUpdate
 from ..storage import get_storage
-from .workspaces import WRITE_ROLES, require_workspace_read_access, require_workspace_write_access
+from .workspaces import (
+    WRITE_ROLES,
+    delete_stored_images,
+    require_workspace_read_access,
+    require_workspace_write_access,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workspaces/{workspace_id}/entries", tags=["entries"])
+
+# Same limit/offset convention as GET /api/workspaces/public
+# (workspaces.PUBLIC_WORKSPACES_DEFAULT_LIMIT/MAX_LIMIT) and GET
+# /api/admin/users (admin.ADMIN_USERS_DEFAULT_LIMIT/MAX_LIMIT) - same
+# default/max values, for consistency across the one pagination scheme
+# this codebase uses rather than inventing a new one here.
+ENTRIES_DEFAULT_LIMIT = 20
+ENTRIES_MAX_LIMIT = 100
 
 # Entry-photo upload validation. The frontend's own file picker already
 # restricts to accept="image/*" (see NewEntryForm.tsx/EntryCard.tsx), but
@@ -271,6 +284,8 @@ def list_entries(
     located_only: bool = Query(
         False, description="Only entries with a location set - powers the map view, same visibility rules apply"
     ),
+    limit: int = Query(ENTRIES_DEFAULT_LIMIT, ge=1, le=ENTRIES_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
@@ -282,10 +297,29 @@ def list_entries(
     Postgres tsvector), an exact tag filter (`tag`), and/or `located_only`
     (for the map view) - reuses this same _apply_visibility call rather
     than a separate endpoint or permission check, so a located entry the
-    caller couldn't otherwise see never appears on the map either."""
+    caller couldn't otherwise see never appears on the map either.
+
+    `limit`/`offset` page through results, same convention (and same
+    default/max values) as GET /api/workspaces/public and GET
+    /api/admin/users - the frontend's "load more" pattern (see
+    PublicWorkspaceBrowser.tsx, and App.tsx's entry list) fetches
+    `limit` at a time and treats a page shorter than `limit` as the end.
+
+    Eager-loads coauthors/images/tags with `selectinload` so returning a
+    page of entries costs a small constant number of queries (one for
+    the entries themselves, one per eager-loaded relationship) rather
+    than scaling with how many entries are on the page - without this,
+    JournalEntryOut's serialization triggers a separate query per
+    relationship *per row* (an N+1 pattern) as it reads each entry's
+    `.coauthors`/`.images`/`.tags`."""
     require_workspace_read_access(workspace_id, db, current_user)
 
     stmt = _apply_visibility(select(JournalEntry), current_user, workspace_id)
+    stmt = stmt.options(
+        selectinload(JournalEntry.coauthors),
+        selectinload(JournalEntry.images),
+        selectinload(JournalEntry.tags),
+    )
 
     if tag is not None:
         stmt = stmt.where(JournalEntry.tags.any(Tag.name == tag.strip().lower()))
@@ -299,6 +333,8 @@ def list_entries(
         stmt = stmt.order_by(func.ts_rank(JournalEntry.search_vector, tsquery).desc(), JournalEntry.id.desc())
     else:
         stmt = stmt.order_by(JournalEntry.start_date.desc(), JournalEntry.id.desc())
+
+    stmt = stmt.limit(limit).offset(offset)
 
     return db.scalars(stmt).unique().all()
 
@@ -524,11 +560,16 @@ def delete_entry(
     entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
     if not _is_owner(entry, current_user):
         raise HTTPException(status_code=403, detail="Only the primary author can delete this entry")
-    storage = get_storage()
-    for image in entry.images:
-        storage.delete(image.filename)
+    # Read the filenames before deleting the row - nothing left to
+    # traverse afterward - but don't touch storage until the database
+    # delete has actually committed (see workspaces.delete_stored_images
+    # for why this ordering, not the reverse, is the safe one: a commit
+    # failure here must never have already deleted real files for a
+    # database row that's still there).
+    image_filenames = [image.filename for image in entry.images]
     db.delete(entry)
     db.commit()
+    delete_stored_images(image_filenames)
     logger.info("entry.deleted workspace_id=%s entry_id=%s user_id=%s", workspace_id, entry_id, current_user.id)
 
 
