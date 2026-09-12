@@ -337,11 +337,13 @@ Creating an account is open to anyone (it's already rate-limited - see
 
 ## Backups and monitoring
 
-There's no production deployment yet (that's a separate, not-yet-started
-roadmap item), so what's here is scoped to actually protecting whatever
-Postgres instance `DATABASE_URL` points at today - the local
-docker-compose one - in a way that carries over cleanly once real
-hosting is chosen, without anything cloud-provider-specific baked in.
+The app is deployment-ready (see [DEPLOYMENT.md](DEPLOYMENT.md) for the
+full Railway + Cloudflare R2 guide) but hasn't necessarily actually been
+deployed yet - whether it's live anywhere depends on whether that guide
+has been run. Either way, what's here works identically against whatever
+Postgres instance `DATABASE_URL` points at - the local docker-compose one
+during development, or a real deployed one in production - without
+anything cloud-provider-specific baked in.
 
 ### Backups
 
@@ -429,9 +431,9 @@ Postgres is reachable, or `{"status": "unhealthy", ...}` (`503`) when it
 isn't, logging the failure the same way everything else in this app
 does.
 
-**Once the app is deployed somewhere reachable from the internet** (not
-yet - see the top of this section), point an uptime monitor at
-`https://<your-domain>/api/health`. A free tier of a service like
+**Once the app is deployed somewhere reachable from the internet** (see
+[DEPLOYMENT.md](DEPLOYMENT.md) if that hasn't happened yet), point an
+uptime monitor at `https://<your-domain>/api/health`. A free tier of a service like
 [UptimeRobot](https://uptimerobot.com/) or
 [Better Stack](https://betterstack.com/uptime) is plenty for a
 personal-scale app: create an HTTP(S) monitor, point it at that URL, and
@@ -448,12 +450,26 @@ REST resources: `POST /api/users` (register, optional `invite_token`),
 Account: `POST /api/account/verify-email/resend`, `POST
 /api/account/verify-email/{token}`, `POST
 /api/account/password-reset/request`, `POST
-/api/account/password-reset/{token}`.
+/api/account/password-reset/{token}`, `DELETE /api/account` (permanently
+delete your own account - see "Invites, email verification, and password
+reset" and "Workspaces" above for the blocking/cascade rules).
 
-Workspaces: `POST/GET /api/workspaces`, `GET /api/workspaces/{id}/members`,
-`DELETE /api/workspaces/{id}/members/{user_id}`, `DELETE /api/workspaces/{id}`,
-`PATCH /api/workspaces/{id}/transfer-ownership`,
-`POST/GET /api/workspaces/{id}/invites`, `DELETE
+Google Sign-In (additive to local login above - see
+[ARCHITECTURE.md](ARCHITECTURE.md) for how and why): `GET
+/api/auth/google/config` (no auth - whether the button should show),
+`GET /api/auth/google/login` (starts the redirect to Google), `GET
+/api/auth/google/callback` (Google's own redirect target - not
+something you call directly).
+
+Workspaces: `POST/GET /api/workspaces`, `GET /api/workspaces/public`
+(no auth - browse/discover public workspaces, optional `q=`/`sort=`/
+`limit=`/`offset=`), `PATCH /api/workspaces/{id}` (owner-only, toggle
+public/private), `GET /api/workspaces/{id}/members`, `PATCH
+/api/workspaces/{id}/members/{user_id}` (owner-only, set a member's role
+to member/subscriber), `DELETE /api/workspaces/{id}/members/{user_id}`,
+`DELETE /api/workspaces/{id}`, `PATCH
+/api/workspaces/{id}/transfer-ownership`, `POST/GET
+/api/workspaces/{id}/invites`, `DELETE
 /api/workspaces/{id}/invites/{invite_id}`.
 
 Invites (not workspace-nested - the token alone resolves it): `GET
@@ -462,7 +478,9 @@ Invites (not workspace-nested - the token alone resolves it): `GET
 Workspace-scoped (see "Workspaces" above - every one of these requires
 membership in `{id}`): `GET/POST /api/workspaces/{id}/entries` (optional
 `q=`/`tag=` on GET), `GET/PATCH/DELETE /api/workspaces/{id}/entries/{entry_id}`,
-`POST /api/workspaces/{id}/entries/{entry_id}/images` (add photos to an
+`GET /api/workspaces/{id}/entries/{entry_id}/edit-history` (who changed
+what, when - an audit log, not version history/restore), `POST
+/api/workspaces/{id}/entries/{entry_id}/images` (add photos to an
 existing entry), `GET /api/workspaces/{id}/entries/tags` (tags in use),
 `GET/POST /api/workspaces/{id}/entries/{entry_id}/comments`.
 
@@ -474,6 +492,18 @@ the entry itself).
 
 Spotify: `GET /api/spotify/playlists?q=` (public catalog search) and the
 account-linking endpoints described above.
+
+Places (no auth - see `backend/app/routers/places.py`; backend-proxied
+OpenStreetMap Nominatim, used by an entry's optional location field):
+`GET /api/places/search?q=`, `GET /api/places/reverse?lat=&lon=`.
+
+Admin (site-wide, requires `User.is_admin` - granted with
+`python -m scripts.grant_admin <username>` from `backend/`, never a web
+endpoint, since the first admin can't grant themselves through one - see
+[ARCHITECTURE.md](ARCHITECTURE.md)): `GET /api/admin/users` (optional
+`q=`/`limit=`/`offset=`), `POST /api/admin/users/{user_id}/deactivate`,
+`POST /api/admin/users/{user_id}/reactivate`, `GET /api/admin/stats`
+(user/workspace/entry counts, signup trends, latest backup status).
 
 `GET /api/health` (no auth) - see "Backups and monitoring" above.
 

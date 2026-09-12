@@ -1,7 +1,6 @@
 # Purpose-built, minimal image for the daily-backup sidecar service
-# defined in docker-compose.yml - NOT the application server (there's no
-# Dockerfile for that yet; the backend still runs directly via uvicorn,
-# see the README's "Running locally"). Based on postgres:16-alpine
+# defined in docker-compose.yml - NOT the application server (that's the
+# root Dockerfile; see DEPLOYMENT.md). Based on postgres:16-alpine
 # specifically so pg_dump/psql are the exact matching version already
 # used by the postgres service itself, with Python layered on top to
 # run backup_database.py, which reuses app/storage.py for the
