@@ -179,3 +179,35 @@ export interface InvitePreview {
   expires_at: string
   account_exists: boolean
 }
+
+// One row of GET /api/invites - invites currently pending for *my own*
+// email, so a logged-in user has somewhere to see (and act on) an invite
+// beyond just the emailed link. Unlike WorkspaceInvite above (what a
+// workspace owner sees for invites they sent), this one includes the
+// token - accepting it is POST /api/invites/{token}/accept, the same
+// endpoint the emailed link itself uses.
+export interface MyPendingInvite {
+  token: string
+  workspace_id: number
+  workspace_name: string
+  role: WorkspaceRole
+  inviter_username: string
+  created_at: string
+  expires_at: string
+}
+
+export interface Notification {
+  id: number
+  // "comment" and "invite" today, matched by string in
+  // NotificationBell.tsx to decide where a click navigates - see
+  // models.Notification's docstring for why this stays a plain string
+  // (not a fixed union) on the backend, so a future notification type
+  // never needs a schema change there. An unrecognized type still
+  // renders fine via `message`, it just won't have special navigation.
+  type: string
+  message: string
+  entry_id: number | null
+  workspace_id: number | null
+  read_at: string | null
+  created_at: string
+}
