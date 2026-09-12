@@ -35,6 +35,30 @@ export interface JournalEntry {
   latitude: number | null
   longitude: number | null
   location_name: string | null
+  // Whether a public single-entry share link currently exists - never the
+  // actual token (see backend schemas.JournalEntryOut.is_shared). The
+  // token itself is only ever returned from POST .../share, to the
+  // primary author who just requested it.
+  is_shared: boolean
+}
+
+/** The public, unauthenticated single-entry view fetched from
+ * GET /api/shared/{token} - deliberately a separate, smaller shape than
+ * JournalEntry: no id, no workspace, no author identity, nothing that
+ * would let the viewer learn anything beyond this one memory. */
+export interface SharedEntry {
+  start_date: string
+  end_date: string
+  text: string | null
+  playlist_id: string
+  playlist_name: string
+  playlist_url: string
+  playlist_image_url: string | null
+  latitude: number | null
+  longitude: number | null
+  location_name: string | null
+  tags: Tag[]
+  images: EntryImage[]
 }
 
 // A location as picked from place search or "use my current location" -

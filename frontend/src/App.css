@@ -894,6 +894,45 @@ h3 {
   background: var(--accent-hover);
 }
 
+/* --- Single-entry share panel (EntryCard) --------------------------------- */
+
+.share-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+}
+
+.share-link-row {
+  display: flex;
+  gap: 8px;
+}
+
+.share-link-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.share-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* --- Shared single-entry view (?shared=TOKEN) ----------------------------- */
+
+.shared-entry-shell .app-header {
+  justify-content: flex-start;
+}
+
+.shared-entry-card {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
 /* --- Map view ------------------------------------------------------------ */
 
 .map-view-container {

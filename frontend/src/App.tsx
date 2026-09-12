@@ -14,6 +14,7 @@ import NotificationBell from './components/NotificationBell'
 import PublicWorkspaceBrowser from './components/PublicWorkspaceBrowser'
 import ResetPasswordPage from './components/ResetPasswordPage'
 import SearchBar from './components/SearchBar'
+import SharedEntryView from './components/SharedEntryView'
 import SpotifyConnect from './components/SpotifyConnect'
 import VerifyEmailBanner from './components/VerifyEmailBanner'
 import WorkspaceSettings from './components/WorkspaceSettings'
@@ -185,6 +186,13 @@ export default function App() {
   const resetTokenFromUrl = useOneShotUrlParam('reset')
   const [resetToken, setResetToken] = useState(resetTokenFromUrl)
 
+  // --- Single-entry share link (?shared=TOKEN) - its own standalone,
+  // read-only page, same one-shot-param convention as the others above.
+  // Never a state that needs clearing/dismissing the way invite/reset do
+  // - there's no logged-in follow-up action, so this alone (no setter
+  // call anywhere) is enough.
+  const sharedToken = useOneShotUrlParam('shared')
+
   useEffect(() => {
     if (authLoading || !activeWorkspace) return
     setLoading(true)
@@ -268,6 +276,10 @@ export default function App() {
   }
 
   if (authLoading) return null
+
+  if (sharedToken) {
+    return <SharedEntryView token={sharedToken} />
+  }
 
   if (resetToken) {
     return <ResetPasswordPage token={resetToken} onDone={() => setResetToken(null)} />
