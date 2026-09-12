@@ -108,9 +108,68 @@ this "just works").
    beyond that, since it speaks the same S3-compatible API the app
    already talks to.
 
-Without this, the app still works, but uploaded photos are stored
-directly on Railway's container instead of R2 - which is lost the next
-time the container restarts or redeploys. Set this before real use.
+6. Configure the bucket's CORS policy - **required**, not optional: the
+   frontend fetches a photo through a presigned R2 URL using `fetch()`
+   (rather than a plain `<img src>`) so it can happen after the app's own
+   auth check, and a cross-origin `fetch` only succeeds if the response
+   carries an `Access-Control-Allow-Origin` header - which R2 never sends
+   unless the bucket has an explicit CORS policy. Without this step,
+   photos will silently fail to load (the frontend swallows the fetch
+   error and just renders nothing) even though everything else above is
+   configured correctly.
+
+   In the Cloudflare dashboard, open your bucket -> **Settings** -> **CORS
+   Policy** -> **Add CORS policy**, and paste something like this (the
+   dashboard's editor takes a bare array like the one below - the
+   important part is the object shape, one entry per origin you need):
+
+   ```json
+   [
+     {
+       "AllowedOrigins": ["https://your-app-name.up.railway.app"],
+       "AllowedMethods": ["GET"],
+       "AllowedHeaders": ["*"],
+       "MaxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+   Replace `https://your-app-name.up.railway.app` with your actual
+   deployed URL - the same value you'll set `FRONTEND_URL` to in step 5 of
+   the next section, once you know it (Railway assigns it after your
+   first deploy - see below). It's fine to come back and edit this policy
+   once you have that real URL. If you add a custom domain later (see
+   "Add a custom domain" further down), add it here too rather than
+   replacing the Railway one, so both keep working. For local development
+   against a real R2 bucket (not the default local-disk fallback), also
+   add an entry for `http://localhost:5173`:
+
+   ```json
+   [
+     {
+       "AllowedOrigins": ["https://your-app-name.up.railway.app"],
+       "AllowedMethods": ["GET"],
+       "AllowedHeaders": ["*"],
+       "MaxAgeSeconds": 3600
+     },
+     {
+       "AllowedOrigins": ["http://localhost:5173"],
+       "AllowedMethods": ["GET"],
+       "AllowedHeaders": ["*"],
+       "MaxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+   Only `GET` is needed - the app only ever reads photos back through the
+   presigned URL; uploads go through the app's own API, not directly to
+   R2 from the browser.
+
+Without object storage configured at all (steps 1-5), the app still
+works, but uploaded photos are stored directly on Railway's container
+instead of R2 - which is lost the next time the container restarts or
+redeploys. Without the CORS policy (step 6), photos silently fail to
+load instead. Set both before real use.
 
 ## 4. Set the rest of the required and optional variables
 

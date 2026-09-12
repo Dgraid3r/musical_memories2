@@ -26,16 +26,38 @@ def test_send_email_without_smtp_records_content_in_dev_outbox(monkeypatch):
     assert sent["token"] == "the-token-value"
 
 
-def test_send_email_without_smtp_logs_the_content(monkeypatch, caplog):
+def test_send_email_without_smtp_logs_recipient_and_subject_only(monkeypatch, caplog):
+    """The log line identifies which email would have been sent (useful
+    for debugging "did this fire at all") without ever putting the
+    actual body/token into the log stream. SMTP_* is documented as fully
+    optional (see DEPLOYMENT.md), so this dev-mode path is the real
+    default production behavior for a first deploy, not just a local
+    convenience - a reset/verification/invite link/token must never
+    reach a real log stream (or a Sentry breadcrumb) this way."""
     monkeypatch.delenv("SMTP_HOST", raising=False)
     with caplog.at_level(logging.INFO, logger="app.email"):
-        send_email("logme@example.com", "Log Subject", "Log body with the real link/token")
+        send_email("logme@example.com", "Log Subject", "Log body with the real link/token=SECRET123")
 
     messages = [r.getMessage() for r in caplog.records]
     combined = "\n".join(messages)
     assert "logme@example.com" in combined
     assert "Log Subject" in combined
-    assert "Log body with the real link/token" in combined
+    assert "Log body with the real link/token=SECRET123" not in combined
+    assert "SECRET123" not in combined
+
+
+def test_send_email_without_smtp_still_records_full_body_in_dev_outbox_despite_safe_logging(monkeypatch):
+    """The fix must only change what reaches the logger - the in-memory
+    dev outbox (last_email_to) is the test/local-dev-only inspection
+    path and must keep recording the full body and token exactly as
+    before, since the rest of this suite pulls tokens out of it."""
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    send_email("logme2@example.com", "Subject", "Body with token=SECRET456", token="SECRET456")
+
+    sent = last_email_to("logme2@example.com")
+    assert sent is not None
+    assert sent["body"] == "Body with token=SECRET456"
+    assert sent["token"] == "SECRET456"
 
 
 def test_last_email_to_returns_none_for_unknown_recipient():

@@ -6,11 +6,19 @@ one paid vendor and works with anything from a real transactional-email
 provider to a personal Gmail account later.
 
 The captain doesn't have an email provider set up yet, so when SMTP_HOST
-isn't configured, sending doesn't fail - it logs the email's content
-(recipient, subject, and critically the actual link/token) to the
-structured logger instead, the same optional-no-op shape as SENTRY_DSN.
-That makes every flow that sends an email fully usable and testable
-locally right now, with no mail server anywhere.
+isn't configured, sending doesn't fail - it's recorded in the in-memory
+_dev_outbox below (full body, token included) for local/test inspection,
+and only the recipient and subject - never the body or token - go to the
+structured logger, the same optional-no-op shape as SENTRY_DSN. Every
+SMTP_* variable is documented as optional (see DEPLOYMENT.md), so this is
+the actual default production configuration for a first deploy, not just
+a local convenience - the body/token must never reach a real log stream
+(or, if SENTRY_DSN is also configured, a Sentry breadcrumb), where anyone
+with log access could read a live password-reset link straight out of it.
+_dev_outbox itself still keeps the full body so tests (and local dev
+without SMTP configured) can inspect exactly what would have been sent,
+especially the token embedded in it, without a real mail server
+anywhere.
 
 A send never raises: a broken SMTP config (bad credentials, unreachable
 host) must not break the underlying action (registering, requesting a
@@ -62,7 +70,12 @@ def send_email(to: str, subject: str, body: str, *, token: str | None = None) ->
 
     host = os.environ.get("SMTP_HOST")
     if not host:
-        logger.info("email.dev_mode to=%r subject=%r body=%s", to, subject, body)
+        # Never log body/token here - see this module's docstring. The
+        # full body (including the token) is still recorded in
+        # _dev_outbox above for tests/local inspection; this line must
+        # stay safe to run in a real deployment where SMTP_* was simply
+        # never configured (every SMTP_* var is documented as optional).
+        logger.info("email.dev_mode to=%r subject=%r (SMTP not configured, not sent)", to, subject)
         return
 
     port = int(os.environ.get("SMTP_PORT", "587"))
