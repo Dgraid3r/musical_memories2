@@ -40,6 +40,57 @@ Roughly in the order it landed:
    third, read-only membership role (subscriber), alongside the
    "inaccessible reads as not-found" non-disclosure pattern being
    extended to cover fully anonymous requests.
+8. **Real invites, email verification, and password reset.** Joining a
+   workspace became a real, consent-based flow — an owner invites by
+   email, and the invitee accepts (or registers, if they had no
+   account) — replacing an owner unilaterally adding an existing
+   username. Registration sends a verification email (tracked via
+   `User.email_verified`, though nothing in the app enforces it yet),
+   and a forgotten password can be reset self-service via an emailed,
+   single-use, time-limited token instead of requiring direct database
+   access.
+9. **Workspace ownership transfer and account deletion.** A workspace
+   owner can hand ownership to another existing member
+   (`PATCH /api/workspaces/{id}/transfer-ownership`), and a user can
+   permanently delete their own account (`DELETE /api/account`), which
+   anonymizes their identifying fields in place while leaving every
+   entry/comment they authored untouched under a "Deleted user" label.
+10. **Photo storage off local disk.** Uploaded photos moved to a
+    pluggable storage backend — local disk by default (unchanged, zero
+    setup), or any S3-compatible object storage (AWS S3, Cloudflare R2,
+    Backblaze B2, etc.) once configured — with a one-time script to
+    migrate already-uploaded local files over.
+11. **Containerized deployment, CI, and automated backups.** The app
+    now builds as a single Docker image (frontend + backend served
+    together) deployable to Railway or any Docker host — see
+    [`DEPLOYMENT.md`](DEPLOYMENT.md) — with GitHub Actions CI running
+    the full backend test suite and frontend build on every push/PR
+    against `master`/`staging`, a scheduled backup script (`pg_dump`,
+    gzip-compressed, to object storage or a local fallback, with
+    configurable retention), and a `GET /api/health` endpoint any
+    uptime monitor can point at.
+12. **Geotagging, Google Sign-In, and the admin dashboard.** An entry
+    can carry an optional location (latitude/longitude/name, via a
+    backend-proxied OpenStreetMap Nominatim search — no third-party API
+    key ever reaches the browser); a user can sign in or register with
+    Google instead of a local password (additive to local login — see
+    [`ARCHITECTURE.md`](ARCHITECTURE.md)); and a small site-wide admin
+    dashboard (`/api/admin/*`, granted via `scripts/grant_admin.py`)
+    gives user management (list/deactivate/reactivate) and operational
+    visibility (user/workspace/entry counts, signup trends, latest
+    backup status).
+13. **Further concurrency and security hardening.** On top of item 6's
+    first pass: fixed a handful of real races under concurrent load
+    (two simultaneous ownership transfers, two simultaneous new-tag
+    creations, two simultaneous invite accepts), closed a path-traversal
+    hole in the production SPA-fallback route, bound Google sign-in's
+    CSRF state to the requesting browser, replaced a SQL-wildcard-
+    injection-prone email lookup with an exact match against normalized
+    (lowercased) stored emails, added a type-allowlist and size cap to
+    entry-photo uploads, stopped password-reset/verification/invite
+    tokens from ever reaching plaintext logs, and added a dedicated test
+    that catches structural drift between the SQLAlchemy models and the
+    Alembic migration chain before it reaches a real deployment.
 
 For the exact current data model, permissions, and API shape behind all
 of the above, see [`ARCHITECTURE.md`](ARCHITECTURE.md); for the setup
@@ -47,41 +98,12 @@ and command reference, see [`README.md`](README.md).
 
 ## Planned
 
-Discussed but not yet built. No commitments on order or timing here —
-this section exists so the next priority conversation has a starting
-list, not a blank page.
-
-- **A real invite flow.** Today, adding someone to a workspace means an
-  owner typing their existing username directly — there's no
-  email-based invitation, no accept/decline step, and no way to invite
-  someone who doesn't already have an account.
-- **Email verification.** Registration doesn't currently confirm that a
-  user actually owns the email address they signed up with.
-- **Password reset.** There's no self-service way to recover an account
-  if a password is forgotten — today that would require direct database
-  access.
-- **Workspace ownership transfer.** A workspace's owner can't currently
-  hand ownership to someone else, or step down, which also means an
-  owner can't remove themselves from a workspace they created.
-- **Spotify API quota headroom.** The app currently shares one Spotify
-  developer app's rate limits across every user of every workspace. As
-  real usage grows, this needs to be actively watched (the app-only
-  catalog search cache already logs cache hit/miss rates for exactly this
-  purpose — see [`ARCHITECTURE.md`](ARCHITECTURE.md)) and mitigated before
-  it becomes a real ceiling, likely through some combination of a larger
-  Spotify API quota tier and smarter caching.
-- **Photo storage off local disk.** Uploaded photos currently live as
-  files on the backend server's own disk. That doesn't survive a
-  redeploy to a fresh machine and doesn't scale past one server — moving
-  to object storage (e.g. S3-compatible storage) is the natural next
-  step once the app needs to run somewhere more durable than a single
-  machine.
-- **Containerized deployment and CI.** The backend and frontend aren't
-  yet packaged to run anywhere beyond a developer's own machine (Postgres
-  already runs in Docker via `docker-compose.yml`, but the app itself
-  doesn't), and there's no automated pipeline that runs the test suite
-  and build on every change.
-- **Automated backups and uptime monitoring.** Once this runs anywhere
-  other than a laptop, it needs a real backup strategy for the database
-  and photo storage, plus monitoring that notices — and alerts someone —
-  if the app goes down.
+Nothing concrete is currently planned as a new feature build. The one
+ongoing (not actively-worked-on) concern being watched rather than
+built is **Spotify API quota headroom**: the app shares one Spotify
+developer app's rate limits across every user of every workspace, and
+as real usage grows this needs watching (the app-only catalog search
+cache already logs cache hit/miss rates for exactly this purpose — see
+[`ARCHITECTURE.md`](ARCHITECTURE.md)) and mitigating before it becomes
+a real ceiling — likely some combination of a larger Spotify API quota
+tier and smarter caching, if and when it's actually needed.
