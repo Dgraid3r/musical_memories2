@@ -251,6 +251,16 @@ export async function deleteAccount(password: string, token: string): Promise<{ 
   return res.json()
 }
 
+/** Fetches the caller's data-export zip as a Blob - the caller is
+ * responsible for turning it into an actual download (see
+ * AccountSettings' use of URL.createObjectURL, the same pattern already
+ * used for photo blobs in EntryPhoto/MapView). */
+export async function exportAccountData(token: string): Promise<Blob> {
+  const res = await fetch('/api/account/export', { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to export your data'))
+  return res.blob()
+}
+
 export async function updateWorkspaceMemberRole(
   workspaceId: number,
   userId: number,

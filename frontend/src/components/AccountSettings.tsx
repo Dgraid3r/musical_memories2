@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ApiError, deleteAccount } from '../api'
+import { ApiError, deleteAccount, exportAccountData } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { useTheme, type ThemeChoice } from '../theme/ThemeContext'
 
@@ -24,6 +24,33 @@ export default function AccountSettings({ onClose }: Props) {
   const [password, setPassword] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  async function handleExport() {
+    if (!token) return
+    setExporting(true)
+    setExportError(null)
+    try {
+      const blob = await exportAccountData(token)
+      // The browser's own download sandboxing means a plain data/blob URL
+      // can't trigger a "Save As" - a temporary, immediately-removed
+      // anchor with the `download` attribute is the standard way to turn
+      // a fetched Blob into an actual file save.
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'musical-memories-export.zip'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setExportError(err instanceof ApiError ? err.message : 'Could not export your data.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   async function handleDelete(e: React.FormEvent) {
     e.preventDefault()
@@ -69,6 +96,16 @@ export default function AccountSettings({ onClose }: Props) {
             </button>
           ))}
         </div>
+
+        <h3>Export my data</h3>
+        <p className="hint">
+          Download a zip archive of your own data: your profile basics, every entry you've authored or co-authored
+          (across all your workspaces), your own comments, and your photos.
+        </p>
+        <button type="button" onClick={handleExport} disabled={exporting}>
+          {exporting ? 'Preparing export...' : 'Export my data'}
+        </button>
+        {exportError && <p className="error">{exportError}</p>}
 
         <h3>Delete my account</h3>
         {!confirming && (
