@@ -88,6 +88,38 @@ def test_create_duplicate_pending_invite_conflicts(client, make_user, make_works
     assert res.status_code == 409
 
 
+def test_create_invite_wildcard_email_does_not_false_match_existing_member(client, make_user, make_workspace):
+    """Same ilike-wildcard-injection root cause as account.py's password
+    reset (see test_password_reset.py's wildcard tests): User.email.ilike
+    treated % and _ as SQL wildcards, and WorkspaceInviteCreate.email
+    (also EmailStr) doesn't reject them. A wildcard-shaped invite email
+    could previously false-match an unrelated existing member and
+    spuriously 409. Comparing with == against the normalized column
+    means it no longer can."""
+    alice = make_user("alice")
+    bob = make_user("bob")  # bob@example.com - already a member, not the invitee
+    ws = make_workspace(alice, bob)
+
+    res = client.post(
+        f"/api/workspaces/{ws['id']}/invites", headers=alice["headers"], json={"email": "%@example.com"}
+    )
+    assert res.status_code == 201
+
+
+def test_create_invite_wildcard_email_does_not_false_match_pending_invite(client, make_user, make_workspace):
+    """Same fix, the other lookup in create_invite: a wildcard-shaped
+    email must not false-match an unrelated already-pending invite
+    either."""
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    _create_invite(client, alice, ws, "carol@example.com")
+
+    res = client.post(
+        f"/api/workspaces/{ws['id']}/invites", headers=alice["headers"], json={"email": "%@example.com"}
+    )
+    assert res.status_code == 201
+
+
 def test_create_invite_invalid_role_rejected(client, make_user, make_workspace):
     alice = make_user("alice")
     ws = make_workspace(alice)
