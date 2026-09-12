@@ -17,8 +17,10 @@ import PublicWorkspaceBrowser from './components/PublicWorkspaceBrowser'
 import ResetPasswordPage from './components/ResetPasswordPage'
 import SearchBar from './components/SearchBar'
 import SharedEntryView from './components/SharedEntryView'
+import SharedRecapView from './components/SharedRecapView'
 import SpotifyConnect from './components/SpotifyConnect'
 import VerifyEmailBanner from './components/VerifyEmailBanner'
+import WorkspaceRecapPage from './components/WorkspaceRecapPage'
 import WorkspaceSettings from './components/WorkspaceSettings'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher'
 import type { InvitePreview, JournalEntry } from './types'
@@ -133,6 +135,7 @@ export default function App() {
   const [showMapView, setShowMapView] = useState(false)
   const [showAdminDashboard, setShowAdminDashboard] = useState(false)
   const [showMyInvites, setShowMyInvites] = useState(false)
+  const [showRecap, setShowRecap] = useState(false)
   // Set when a map pin's "View this memory" is clicked - closes the map
   // and scrolls that entry's card into view once the (already-loaded)
   // list is showing again. Cleared right after scrolling so it doesn't
@@ -196,6 +199,11 @@ export default function App() {
   // - there's no logged-in follow-up action, so this alone (no setter
   // call anywhere) is enough.
   const sharedToken = useOneShotUrlParam('shared')
+
+  // --- Yearly recap share link (?shared-recap=TOKEN) - same standalone
+  // pattern as ?shared= above, one level up (a whole workspace+year
+  // summary instead of a single entry).
+  const sharedRecapToken = useOneShotUrlParam('shared-recap')
 
   // --- Offline draft queue (PWA offline support) -----------------------
   const online = useOnlineStatus()
@@ -311,6 +319,10 @@ export default function App() {
     return <SharedEntryView token={sharedToken} />
   }
 
+  if (sharedRecapToken) {
+    return <SharedRecapView token={sharedRecapToken} />
+  }
+
   if (resetToken) {
     return <ResetPasswordPage token={resetToken} onDone={() => setResetToken(null)} />
   }
@@ -380,6 +392,10 @@ export default function App() {
     )
   }
 
+  if (showRecap && activeWorkspace) {
+    return <WorkspaceRecapPage workspace={activeWorkspace} onClose={() => setShowRecap(false)} />
+  }
+
   // A subscriber can read everything in the active workspace but can't
   // create entries, add photos, or comment - the entry-specific
   // owner/co-author actions inside EntryCard are already correctly hidden
@@ -405,6 +421,11 @@ export default function App() {
           {activeWorkspace && (
             <button type="button" className="link-btn" onClick={() => setShowMapView((v) => !v)}>
               {showMapView ? 'List view' : 'Map view'}
+            </button>
+          )}
+          {activeWorkspace && (
+            <button type="button" className="link-btn" onClick={() => setShowRecap(true)}>
+              Recap
             </button>
           )}
           <button type="button" className="link-btn" onClick={() => setShowPublicBrowser(true)}>

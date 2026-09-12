@@ -18,6 +18,7 @@ import type {
   Workspace,
   WorkspaceInvite,
   WorkspaceMember,
+  WorkspaceRecap,
   WorkspaceRole,
   WorkspaceVisibility,
 } from './types'
@@ -116,6 +117,44 @@ export async function updateWorkspaceVisibility(
     body: JSON.stringify({ visibility }),
   })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to update workspace visibility'))
+  return res.json()
+}
+
+/** Any workspace member can view an already-computed-or-just-computed
+ * recap - not owner-only, the same "aggregate over content you can
+ * already read" reasoning as the rest of this workspace's entries. */
+export async function fetchWorkspaceRecap(workspaceId: number, year: number, token: string): Promise<WorkspaceRecap> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/recap/${year}`, { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load this year in review'))
+  return res.json()
+}
+
+/** Owner-only - turns on (or, if already on, just re-fetches) this
+ * workspace+year's public recap link, idempotent the same way
+ * enableEntrySharing is. */
+export async function enableRecapSharing(workspaceId: number, year: number, token: string): Promise<string> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/recap/${year}/share`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to enable sharing'))
+  const body: { share_token: string } = await res.json()
+  return body.share_token
+}
+
+export async function disableRecapSharing(workspaceId: number, year: number, token: string): Promise<void> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/recap/${year}/share`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to disable sharing'))
+}
+
+/** No auth - the public link destination itself (see App.tsx's
+ * ?shared-recap= handling). */
+export async function fetchSharedRecap(token: string): Promise<WorkspaceRecap> {
+  const res = await fetch(`/api/shared-recap/${encodeURIComponent(token)}`)
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'This shared link is not valid'))
   return res.json()
 }
 

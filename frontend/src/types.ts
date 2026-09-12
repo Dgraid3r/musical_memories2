@@ -174,6 +174,45 @@ export interface WorkspaceMember {
   role: WorkspaceRole
 }
 
+export interface RecapTagCount {
+  name: string
+  count: number
+}
+
+// A playlist referenced by more than one entry in the recapped year -
+// top_playlists is simply empty when nothing repeats.
+export interface RecapPlaylistCount {
+  playlist_id: string
+  playlist_name: string
+  playlist_image_url: string | null
+  count: number
+}
+
+// The first/last entry of the recapped year, reduced to a glimpse -
+// deliberately never text or photos, see backend schemas.WorkspaceRecapOut.
+export interface RecapEntryHighlight {
+  start_date: string
+  playlist_name: string
+  playlist_image_url: string | null
+}
+
+// A workspace's "wrapped"-style yearly summary - aggregate stats only,
+// identical shape whether fetched in-app (fetchWorkspaceRecap) or via a
+// public share link (fetchSharedRecap). contributors/top_playlists are
+// simply empty when that stat isn't interesting (a solo workspace, or no
+// repeated playlist) rather than omitted or an error.
+export interface WorkspaceRecap {
+  year: number
+  entry_count: number
+  photo_count: number
+  top_tags: RecapTagCount[]
+  most_active_month: string | null
+  first_entry: RecapEntryHighlight | null
+  last_entry: RecapEntryHighlight | null
+  contributors: UserPublic[]
+  top_playlists: RecapPlaylistCount[]
+}
+
 export type PublicWorkspaceSort = 'active' | 'name'
 
 // A public workspace as returned by the discovery endpoint - deliberately

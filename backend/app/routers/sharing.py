@@ -5,9 +5,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import JournalEntry
-from ..schemas import SharedEntryOut
+from ..models import JournalEntry, WorkspaceRecap
+from ..schemas import SharedEntryOut, WorkspaceRecapOut
 from ..storage import get_storage
+from .workspaces import _compute_recap_stats
 
 logger = logging.getLogger(__name__)
 
@@ -59,3 +60,31 @@ def get_shared_entry_image(token: str, image_id: int, db: Session = Depends(get_
     if image is None:
         raise HTTPException(status_code=404, detail="Image not found")
     return get_storage().serve_response(image.filename)
+
+
+# --- Yearly recap sharing -------------------------------------------------
+#
+# A second, separate router in this same file (same reasoning as entries.py
+# splitting router/image_router: one file owning every "here's what an
+# unauthenticated holder of a valid token gets to see" surface) rather than
+# folding a different prefix into the router above.
+recap_router = APIRouter(prefix="/api/shared-recap", tags=["sharing"])
+
+
+@recap_router.get("/{token}", response_model=WorkspaceRecapOut)
+def get_shared_recap(token: str, db: Session = Depends(get_db)):
+    """No auth required. The token is generated only by the workspace
+    owner (see routers/workspaces.py's enable_workspace_recap_sharing) -
+    same non-disclosure 404 as get_shared_entry above for an invalid,
+    never-shared, or since-revoked token. Reuses _compute_recap_stats
+    (the same aggregation the authenticated in-app recap endpoint calls)
+    so the public view can never diverge from - or expose more than -
+    what's already documented as safe to disclose in schemas.
+    WorkspaceRecapOut: aggregate stats and highlighted-entry glimpses
+    only, never entry text, photos, or anything about a member beyond
+    the same username already shown next to their entries/comments
+    everywhere else in this app."""
+    recap = db.scalar(select(WorkspaceRecap).where(WorkspaceRecap.share_token == token))
+    if recap is None:
+        raise HTTPException(status_code=404, detail="Shared recap not found")
+    return _compute_recap_stats(recap.workspace_id, recap.year, db)
