@@ -12,6 +12,7 @@ import type {
   PlaylistResult,
   PublicWorkspace,
   PublicWorkspaceSort,
+  SharedEntry,
   User,
   UserPublic,
   Workspace,
@@ -426,6 +427,43 @@ export async function updateEntry(
   })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to update entry'))
   return res.json()
+}
+
+/** Turns on (or, if already on, just re-fetches) this entry's public
+ * share link - idempotent on the backend, so calling this again is the
+ * normal way for the primary author to redisplay/re-copy an existing
+ * link, not just to create a new one. */
+export async function enableEntrySharing(workspaceId: number, id: number, token: string): Promise<string> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/entries/${id}/share`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to enable sharing'))
+  const body: { share_token: string } = await res.json()
+  return body.share_token
+}
+
+export async function disableEntrySharing(workspaceId: number, id: number, token: string): Promise<void> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/entries/${id}/share`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to disable sharing'))
+}
+
+/** No auth - this is the public link destination itself (see App.tsx's
+ * ?shared= handling). A 404 here means the token is invalid or the
+ * primary author has turned sharing off. */
+export async function fetchSharedEntry(token: string): Promise<SharedEntry> {
+  const res = await fetch(`/api/shared/${encodeURIComponent(token)}`)
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'This shared link is not valid'))
+  return res.json()
+}
+
+export async function fetchSharedEntryImageBlob(token: string, imageId: number): Promise<Blob> {
+  const res = await fetch(`/api/shared/${encodeURIComponent(token)}/images/${imageId}`)
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load photo'))
+  return res.blob()
 }
 
 export async function addImages(workspaceId: number, id: number, images: File[], token: string): Promise<JournalEntry> {

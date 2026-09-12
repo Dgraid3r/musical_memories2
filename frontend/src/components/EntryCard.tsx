@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { addImages, updateEntry } from '../api'
+import { addImages, disableEntrySharing, enableEntrySharing, updateEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import type { EntryLocation, JournalEntry } from '../types'
 import CommentThread from './CommentThread'
@@ -44,6 +44,11 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
   const [editingLocation, setEditingLocation] = useState(false)
   const [savingLocation, setSavingLocation] = useState(false)
   const [draftLocation, setDraftLocation] = useState<EntryLocation | null>(null)
+  const [showSharePanel, setShowSharePanel] = useState(false)
+  const [shareLink, setShareLink] = useState<string | null>(null)
+  const [shareBusy, setShareBusy] = useState(false)
+  const [shareError, setShareError] = useState<string | null>(null)
+  const [shareCopied, setShareCopied] = useState(false)
   const isOwner = user?.id === entry.user_id
   const isCoauthor = entry.coauthors.some((c) => c.id === user?.id)
   const canEditContent = isOwner || isCoauthor
@@ -56,6 +61,56 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
       onUpdated(updated)
     } finally {
       setTogglingVisibility(false)
+    }
+  }
+
+  /** Opens the share panel and (whether sharing was already on or not)
+   * fetches the current token - enabling is idempotent server-side, so
+   * this is also how "Copy link" re-displays an already-shared entry's
+   * link without the frontend needing to persist the token anywhere
+   * itself (see api.ts's enableEntrySharing / models.JournalEntry.
+   * share_token's comment on why the token never comes back from the
+   * ordinary entry-fetch endpoints). */
+  async function openSharePanel() {
+    if (!token) return
+    setShowSharePanel(true)
+    setShareError(null)
+    setShareCopied(false)
+    setShareBusy(true)
+    try {
+      const shareToken = await enableEntrySharing(workspaceId, entry.id, token)
+      setShareLink(`${window.location.origin}/?shared=${shareToken}`)
+      if (!entry.is_shared) onUpdated({ ...entry, is_shared: true })
+    } catch {
+      setShareError('Could not create a share link.')
+    } finally {
+      setShareBusy(false)
+    }
+  }
+
+  async function copyShareLink() {
+    if (!shareLink) return
+    try {
+      await navigator.clipboard.writeText(shareLink)
+      setShareCopied(true)
+    } catch {
+      setShareError('Could not copy the link - you can select and copy it manually.')
+    }
+  }
+
+  async function revokeSharing() {
+    if (!token) return
+    setShareBusy(true)
+    setShareError(null)
+    try {
+      await disableEntrySharing(workspaceId, entry.id, token)
+      setShareLink(null)
+      setShowSharePanel(false)
+      onUpdated({ ...entry, is_shared: false })
+    } catch {
+      setShareError('Could not turn off sharing.')
+    } finally {
+      setShareBusy(false)
     }
   }
 
@@ -128,12 +183,42 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
             <button type="button" onClick={toggleVisibility} disabled={togglingVisibility}>
               Make {entry.is_public ? 'private' : 'public'}
             </button>
+            <button type="button" onClick={openSharePanel} disabled={shareBusy}>
+              {entry.is_shared ? 'Sharing on' : 'Share'}
+            </button>
             <button type="button" className="delete-btn" onClick={() => onDelete(entry.id)}>
               Delete
             </button>
           </div>
         )}
       </header>
+
+      {isOwner && showSharePanel && (
+        <div className="share-panel">
+          <p className="hint">
+            Anyone with this link can view this one memory - no login required. It doesn't make the rest of this
+            workspace visible to anyone.
+          </p>
+          {shareBusy && !shareLink && <p>Preparing link...</p>}
+          {shareLink && (
+            <div className="share-link-row">
+              <input type="text" readOnly value={shareLink} onFocus={(e) => e.target.select()} />
+              <button type="button" onClick={copyShareLink}>
+                {shareCopied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+          )}
+          {shareError && <p className="error">{shareError}</p>}
+          <div className="share-panel-actions">
+            <button type="button" className="delete-btn" onClick={revokeSharing} disabled={shareBusy}>
+              Turn off sharing
+            </button>
+            <button type="button" className="link-btn" onClick={() => setShowSharePanel(false)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {entry.text && <p className="entry-text">{entry.text}</p>}
 

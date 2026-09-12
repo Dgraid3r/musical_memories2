@@ -73,6 +73,13 @@ class JournalEntryOut(BaseModel):
     latitude: float | None
     longitude: float | None
     location_name: str | None
+    # Whether a public single-entry share link currently exists -
+    # deliberately never the actual share_token itself (see models.
+    # JournalEntry.share_token's comment on why): anyone who can view this
+    # entry can see *that* it's shared, but only the primary author can
+    # learn or distribute the real link, via the dedicated share/unshare
+    # endpoints below.
+    is_shared: bool
 
 
 class EntryEditEventOut(BaseModel):
@@ -114,6 +121,39 @@ class JournalEntryUpdate(BaseModel):
     # `"location" in payload.model_fields_set`: absent entirely = leave
     # unchanged, present as JSON null = clear, present as an object = set.
     location: EntryLocationInput | None = None
+
+
+class EntryShareOut(BaseModel):
+    """Returned only from POST .../entries/{id}/share, to the primary
+    author who just called it - the one place the actual share_token
+    value is ever handed out (see JournalEntryOut.is_shared above, which
+    deliberately never includes it)."""
+
+    share_token: str
+
+
+class SharedEntryOut(BaseModel):
+    """The public, unauthenticated single-entry view (GET
+    /api/shared/{token}) - deliberately minimal and separate from
+    JournalEntryOut: no id, no workspace_id, no owner/co-author identity,
+    nothing that would let a viewer learn anything about the workspace
+    this entry lives in or who else is in it. Just the memory itself:
+    text, date(s), tags, location, and the linked playlist."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    start_date: date
+    end_date: date
+    text: str | None
+    playlist_id: str
+    playlist_name: str
+    playlist_url: str
+    playlist_image_url: str | None
+    latitude: float | None
+    longitude: float | None
+    location_name: str | None
+    tags: list[TagOut]
+    images: list[EntryImageOut]
 
 
 class PlaceResult(BaseModel):
