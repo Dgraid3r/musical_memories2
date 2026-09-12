@@ -16,7 +16,7 @@ from .database import check_database_health, get_db  # noqa: E402
 from .logging_config import configure_logging  # noqa: E402  (must load after .env)
 from .rate_limit import limiter  # noqa: E402
 from .sentry_config import configure_sentry  # noqa: E402
-from .routers import account, admin, comments, entries, google_auth, invites, places, sessions, spotify, users, workspaces  # noqa: E402
+from .routers import account, admin, comments, entries, google_auth, invites, notifications, places, sessions, spotify, users, workspaces  # noqa: E402
 
 configure_logging()
 configure_sentry()
@@ -65,6 +65,7 @@ app.include_router(spotify.router)
 app.include_router(places.router)
 app.include_router(google_auth.router)
 app.include_router(admin.router)
+app.include_router(notifications.router)
 
 
 @app.get("/api/health")

@@ -6,6 +6,8 @@ import type {
   EntryLocation,
   InvitePreview,
   JournalEntry,
+  MyPendingInvite,
+  Notification,
   PlaceResult,
   PlaylistResult,
   PublicWorkspace,
@@ -188,6 +190,15 @@ export async function acceptInvite(inviteToken: string, token: string): Promise<
     headers: authHeaders(token),
   })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Could not accept invite'))
+  return res.json()
+}
+
+/** Every invite currently pending for *my own* email - see MyInvites.tsx.
+ * Accepting one of these reuses acceptInvite above (same token, same
+ * endpoint the emailed link itself uses). */
+export async function fetchMyPendingInvites(token: string): Promise<MyPendingInvite[]> {
+  const res = await fetch('/api/invites', { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load your invites'))
   return res.json()
 }
 
@@ -580,4 +591,48 @@ export async function fetchAdminStats(token: string): Promise<AdminStats> {
   const res = await fetch('/api/admin/stats', { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load stats'))
   return res.json()
+}
+
+// --- Notifications (strictly per-caller - see NotificationBell.tsx) ------
+
+export interface NotificationSearchParams {
+  limit?: number
+  offset?: number
+}
+
+export async function fetchNotifications(
+  params: NotificationSearchParams,
+  token: string,
+): Promise<Notification[]> {
+  const query = new URLSearchParams()
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  if (params.offset !== undefined) query.set('offset', String(params.offset))
+  const qs = query.toString()
+  const res = await fetch(`/api/notifications${qs ? `?${qs}` : ''}`, { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load notifications'))
+  return res.json()
+}
+
+export async function fetchUnreadNotificationCount(token: string): Promise<number> {
+  const res = await fetch('/api/notifications/unread-count', { headers: authHeaders(token) })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load notification count'))
+  const body = await res.json()
+  return body.count
+}
+
+export async function markNotificationRead(notificationId: number, token: string): Promise<Notification> {
+  const res = await fetch(`/api/notifications/${notificationId}/read`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to update notification'))
+  return res.json()
+}
+
+export async function markAllNotificationsRead(token: string): Promise<void> {
+  const res = await fetch('/api/notifications/mark-all-read', {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to update notifications'))
 }

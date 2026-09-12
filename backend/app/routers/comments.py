@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
-from ..models import Comment, User
+from ..email import send_email
+from ..models import Comment, JournalEntry, Notification, User
 from ..schemas import CommentCreate, CommentOut, CommentUpdate
 from .entries import _can_view, _get_entry_in_workspace_or_404, _is_owner, _visible_or_404
 from .workspaces import require_workspace_read_access, require_workspace_write_access
@@ -15,6 +16,30 @@ from .workspaces import require_workspace_read_access, require_workspace_write_a
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["comments"])
+
+
+def _notify_new_comment(entry: JournalEntry, comment: Comment, commenter: User, db: Session) -> None:
+    """Notifies the entry's primary author and every co-author - one
+    in-app Notification row plus one email per recipient - but never the
+    commenter themselves, even if they're also a co-author on their own
+    comment. Adds rows to `db` without committing (the caller commits
+    together with the comment itself, so the two are atomic); send_email
+    is a side effect outside that transaction, but it never raises (see
+    its own docstring), so a broken SMTP config can't prevent the
+    comment - or the in-app notification - from actually landing."""
+    recipients = {entry.owner, *entry.coauthors} - {commenter}
+    for recipient in recipients:
+        message = f"{commenter.username} commented on your entry."
+        db.add(
+            Notification(
+                user_id=recipient.id,
+                type="comment",
+                message=message,
+                entry_id=entry.id,
+                workspace_id=entry.workspace_id,
+            )
+        )
+        send_email(recipient.email, "New comment on your Musical Memories entry", f"{message}\n\n{comment.body}")
 
 
 def _visible_entry_or_404(entry_id: int, workspace_id: int, db: Session, user: User | None):
@@ -90,6 +115,7 @@ def create_comment(
         body=payload.body,
     )
     db.add(comment)
+    _notify_new_comment(entry, comment, current_user, db)
     db.commit()
     db.refresh(comment)
     return comment

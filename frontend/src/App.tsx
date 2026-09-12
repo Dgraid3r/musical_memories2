@@ -8,7 +8,9 @@ import EntryCard from './components/EntryCard'
 import ForgotPasswordPage from './components/ForgotPasswordPage'
 import InviteAcceptPrompt from './components/InviteAcceptPrompt'
 import MapView from './components/MapView'
+import MyInvites from './components/MyInvites'
 import NewEntryForm from './components/NewEntryForm'
+import NotificationBell from './components/NotificationBell'
 import PublicWorkspaceBrowser from './components/PublicWorkspaceBrowser'
 import ResetPasswordPage from './components/ResetPasswordPage'
 import SearchBar from './components/SearchBar'
@@ -106,8 +108,13 @@ function useOneShotUrlParam(name: string): string | null {
 
 export default function App() {
   const { user, token, loading: authLoading, logout } = useAuth()
-  const { activeWorkspace, loading: workspaceLoading, error: workspaceError, refresh: refreshWorkspaces } =
-    useWorkspace()
+  const {
+    activeWorkspace,
+    loading: workspaceLoading,
+    error: workspaceError,
+    refresh: refreshWorkspaces,
+    switchWorkspace,
+  } = useWorkspace()
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -120,6 +127,7 @@ export default function App() {
   const [showForgotPassword, setShowForgotPassword] = useState(false)
   const [showMapView, setShowMapView] = useState(false)
   const [showAdminDashboard, setShowAdminDashboard] = useState(false)
+  const [showMyInvites, setShowMyInvites] = useState(false)
   // Set when a map pin's "View this memory" is clicked - closes the map
   // and scrolls that entry's card into view once the (already-loaded)
   // list is showing again. Cleared right after scrolling so it doesn't
@@ -225,6 +233,30 @@ export default function App() {
     setScrollToEntryId(entryId)
   }
 
+  // A "comment" notification's target entry might not be in the
+  // currently-loaded page (a different search filter, or just further
+  // back than the first page) - clearing the search and switching to
+  // the entry's own workspace maximizes the chance it's actually there
+  // once the list reloads. Same accepted limitation as
+  // handleViewEntryFromMap above if it still isn't: the scroll-target
+  // effect simply no-ops and the id stays pending harmlessly.
+  function handleNavigateToEntryFromNotification(workspaceId: number, entryId: number) {
+    setShowMyInvites(false)
+    setShowAdminDashboard(false)
+    setShowMapView(false)
+    setSearchQuery('')
+    if (workspaceId !== activeWorkspace?.id) {
+      switchWorkspace(workspaceId)
+    }
+    setScrollToEntryId(entryId)
+  }
+
+  function handleNavigateToInvitesFromNotification() {
+    setShowAdminDashboard(false)
+    setShowMapView(false)
+    setShowMyInvites(true)
+  }
+
   async function handleDelete(id: number) {
     if (!token || !activeWorkspace) return
     await deleteEntry(activeWorkspace.id, id, token)
@@ -294,6 +326,18 @@ export default function App() {
     return <AdminDashboard onClose={() => setShowAdminDashboard(false)} />
   }
 
+  if (showMyInvites) {
+    return (
+      <MyInvites
+        onClose={() => setShowMyInvites(false)}
+        onAccepted={() => {
+          refreshWorkspaces()
+          setShowMyInvites(false)
+        }}
+      />
+    )
+  }
+
   // A subscriber can read everything in the active workspace but can't
   // create entries, add photos, or comment - the entry-specific
   // owner/co-author actions inside EntryCard are already correctly hidden
@@ -324,6 +368,13 @@ export default function App() {
           <button type="button" className="link-btn" onClick={() => setShowPublicBrowser(true)}>
             Browse public
           </button>
+          <button type="button" className="link-btn" onClick={() => setShowMyInvites(true)}>
+            Invites
+          </button>
+          <NotificationBell
+            onNavigateToEntry={handleNavigateToEntryFromNotification}
+            onNavigateToInvites={handleNavigateToInvitesFromNotification}
+          />
           {user.is_admin && (
             <button type="button" className="link-btn" onClick={() => setShowAdminDashboard(true)}>
               Admin
