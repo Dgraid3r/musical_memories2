@@ -417,13 +417,30 @@ export async function updateEntry(
     // request body, while an explicit null does - matching the backend's
     // model_fields_set check (see routers/entries.py update_entry).
     location?: EntryLocation | null
+    // Sets (never clears) the entry's playlist - most useful for
+    // completing an offline-created draft that synced with none. Omit
+    // to leave an existing playlist unchanged.
+    playlist?: PlaylistResult
   },
   token: string,
 ): Promise<JournalEntry> {
+  // The backend's `playlist` shape (playlist_id/playlist_name/...) isn't
+  // the same field names as PlaylistResult (id/name/...) - translate it
+  // here rather than asking every caller to know that difference.
+  const { playlist, ...rest } = updates
+  const body: Record<string, unknown> = { ...rest }
+  if (playlist) {
+    body.playlist = {
+      playlist_id: playlist.id,
+      playlist_name: playlist.name,
+      playlist_url: playlist.url,
+      playlist_image_url: playlist.image_url,
+    }
+  }
   const res = await fetch(`/api/workspaces/${workspaceId}/entries/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
-    body: JSON.stringify(updates),
+    body: JSON.stringify(body),
   })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to update entry'))
   return res.json()
@@ -483,7 +500,10 @@ export interface NewEntryInput {
   startDate: string
   endDate: string
   text: string
-  playlist: PlaylistResult
+  // null only for an offline draft synced with no playlist (see
+  // offlineDrafts.ts) - the online NewEntryForm always requires one
+  // before it will submit at all.
+  playlist: PlaylistResult | null
   images: File[]
   isPublic: boolean
   coauthorUsernames: string[]
@@ -496,10 +516,12 @@ export async function createEntry(workspaceId: number, input: NewEntryInput, tok
   form.set('start_date', input.startDate)
   form.set('end_date', input.endDate)
   form.set('text', input.text)
-  form.set('playlist_id', input.playlist.id)
-  form.set('playlist_name', input.playlist.name)
-  form.set('playlist_url', input.playlist.url)
-  if (input.playlist.image_url) form.set('playlist_image_url', input.playlist.image_url)
+  if (input.playlist) {
+    form.set('playlist_id', input.playlist.id)
+    form.set('playlist_name', input.playlist.name)
+    form.set('playlist_url', input.playlist.url)
+    if (input.playlist.image_url) form.set('playlist_image_url', input.playlist.image_url)
+  }
   form.set('is_public', String(input.isPublic))
   for (const username of input.coauthorUsernames) form.append('coauthor_usernames', username)
   for (const tag of input.tags) form.append('tags', tag)
