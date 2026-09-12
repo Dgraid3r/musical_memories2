@@ -313,6 +313,78 @@ class PublicWorkspaceOut(BaseModel):
     last_active_at: datetime
 
 
+class RecapTagCount(BaseModel):
+    name: str
+    count: int
+
+
+class RecapPlaylistCount(BaseModel):
+    """A playlist referenced by more than one entry in the recapped year -
+    see WorkspaceRecapOut.top_playlists, which is simply empty when no
+    playlist repeats (a small workspace's every entry using a different
+    playlist is a completely normal, ungraded outcome, not an error)."""
+
+    playlist_id: str
+    playlist_name: str
+    playlist_image_url: str | None
+    count: int
+
+
+class RecapEntryHighlight(BaseModel):
+    """The "first" or "last" entry of the recapped year, reduced to a
+    glimpse rather than the entry itself - deliberately never text or
+    photos (see WorkspaceRecapOut's own docstring): a recap is a summary
+    artifact, not a way to read someone's actual journal entry through a
+    side door."""
+
+    start_date: date
+    playlist_name: str
+    playlist_image_url: str | None
+
+
+class WorkspaceRecapOut(BaseModel):
+    """A workspace's "wrapped"-style yearly summary - aggregate stats
+    only, computed live from that workspace's entries dated in `year`
+    (see routers/workspaces.py's _compute_recap_stats). Never entry text,
+    photo bytes, or anything beyond what's already an aggregate count or
+    a highlighted entry's own non-content fields (see RecapEntryHighlight)
+    - this is returned both to an authenticated workspace member (GET
+    .../recap/{year}) and to an anonymous caller with a valid share
+    token (GET /api/shared-recap/{token}), so it can never carry more
+    than either surface is allowed to disclose.
+
+    `contributors` and `top_playlists` are each simply empty when the
+    underlying stat isn't interesting - a solo workspace has no
+    multi-person "who showed up this year" story, and a workspace where
+    no playlist was reused across entries has no "most-played" story -
+    rather than being errors or omitted fields."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    year: int
+    entry_count: int
+    photo_count: int
+    top_tags: list[RecapTagCount]
+    # None only when entry_count is 0 - there's no "most active month" of
+    # a year with no entries in it.
+    most_active_month: str | None
+    first_entry: RecapEntryHighlight | None
+    last_entry: RecapEntryHighlight | None
+    # Distinct primary authors + co-authors across the year's entries -
+    # empty unless there are at least two (see class docstring).
+    contributors: list[UserPublic]
+    top_playlists: list[RecapPlaylistCount]
+
+
+class RecapShareOut(BaseModel):
+    """Returned only from POST .../recap/{year}/share, to the workspace
+    owner who just called it - the one place the actual share token
+    value is ever handed out, the same non-disclosure shape as entries.
+    EntryShareOut above."""
+
+    share_token: str
+
+
 class WorkspaceVisibilityUpdate(BaseModel):
     visibility: Literal["public", "private"]
 

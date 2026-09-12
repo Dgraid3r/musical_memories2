@@ -67,6 +67,7 @@ app.include_router(google_auth.router)
 app.include_router(admin.router)
 app.include_router(notifications.router)
 app.include_router(sharing.router)
+app.include_router(sharing.recap_router)
 
 
 @app.get("/api/health")

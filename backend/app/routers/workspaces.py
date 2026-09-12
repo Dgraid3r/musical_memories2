@@ -1,25 +1,34 @@
+import calendar
 import logging
 import os
 import secrets
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import extract, func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, selectinload
 
-from ..auth import get_current_user
+from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
 from ..email import send_email
-from ..models import JournalEntry, Notification, User, Workspace, WorkspaceInvite, WorkspaceMembership
+from ..models import JournalEntry, Notification, User, Workspace, WorkspaceInvite, WorkspaceMembership, WorkspaceRecap
 from ..schemas import (
     PublicWorkspaceOut,
+    RecapEntryHighlight,
+    RecapPlaylistCount,
+    RecapShareOut,
+    RecapTagCount,
+    UserPublic,
     WorkspaceCreate,
     WorkspaceInviteCreate,
     WorkspaceInviteOut,
     WorkspaceMemberOut,
     WorkspaceMemberRoleUpdate,
     WorkspaceOut,
+    WorkspaceRecapOut,
     WorkspaceTransferOwnershipInput,
     WorkspaceVisibilityUpdate,
 )
@@ -603,4 +612,223 @@ def delete_workspace(
     db.delete(workspace)
     db.commit()
     delete_stored_images(image_filenames)
+
+
+# --- Yearly recap ("wrapped") -----------------------------------------
+
+# A reasonable top N for tags/playlists - a "wrapped"-style summary is
+# meant to be a handful of highlights, not a full frequency table.
+RECAP_TOP_TAGS_LIMIT = 8
+RECAP_TOP_PLAYLISTS_LIMIT = 5
+
+
+def _get_or_create_recap(workspace_id: int, year: int, db: Session) -> WorkspaceRecap:
+    """Get-or-create, matching entries._resolve_tags' own SAVEPOINT
+    pattern for the same reason: two near-simultaneous first views of the
+    same never-before-seen workspace+year (e.g. two members opening the
+    recap page around the same moment) could both pass the "does a row
+    already exist" check before either commits, and uq_workspace_recap_
+    workspace_year would otherwise turn that race into an unhandled
+    IntegrityError instead of both callers simply getting the one row
+    that exists either way."""
+    recap = db.scalar(
+        select(WorkspaceRecap).where(WorkspaceRecap.workspace_id == workspace_id, WorkspaceRecap.year == year)
+    )
+    if recap is not None:
+        return recap
+
+    recap = WorkspaceRecap(workspace_id=workspace_id, year=year)
+    try:
+        with db.begin_nested():
+            db.add(recap)
+            db.flush()
+    except IntegrityError:
+        recap = db.scalar(
+            select(WorkspaceRecap).where(WorkspaceRecap.workspace_id == workspace_id, WorkspaceRecap.year == year)
+        )
+        if recap is None:
+            raise
+    return recap
+
+
+def _compute_recap_stats(workspace_id: int, year: int, db: Session) -> WorkspaceRecapOut:
+    """Always computed live from the workspace's own entries dated in
+    `year` (start_date, the same "which year this memory belongs to"
+    field entries are already ordered/searched by elsewhere) - see
+    models.WorkspaceRecap's docstring for why this is never cached. Used
+    identically by the authenticated in-app recap endpoint and the
+    public shared-recap endpoint (routers/sharing.py), so a stat added
+    or fixed here is correct in both places at once."""
+    entries = (
+        db.scalars(
+            select(JournalEntry)
+            .where(JournalEntry.workspace_id == workspace_id, extract("year", JournalEntry.start_date) == year)
+            .options(
+                selectinload(JournalEntry.tags),
+                selectinload(JournalEntry.images),
+                selectinload(JournalEntry.coauthors),
+                selectinload(JournalEntry.owner),
+            )
+            .order_by(JournalEntry.start_date)
+        )
+        .unique()
+        .all()
+    )
+
+    photo_count = sum(len(entry.images) for entry in entries)
+
+    tag_counter: Counter[str] = Counter()
+    for entry in entries:
+        for tag in entry.tags:
+            tag_counter[tag.name] += 1
+    top_tags = [
+        RecapTagCount(name=name, count=count) for name, count in tag_counter.most_common(RECAP_TOP_TAGS_LIMIT)
+    ]
+
+    most_active_month: str | None = None
+    if entries:
+        month_counter = Counter(entry.start_date.month for entry in entries)
+        busiest_count = max(month_counter.values())
+        # Ties broken by earliest calendar month - arbitrary but
+        # deterministic, so the same year always recomputes the same
+        # answer rather than depending on dict/Counter iteration order.
+        busiest_month = min(month for month, count in month_counter.items() if count == busiest_count)
+        most_active_month = calendar.month_name[busiest_month]
+
+    first_entry = None
+    last_entry = None
+    if entries:
+        # Already ordered by start_date above.
+        first_entry = RecapEntryHighlight(
+            start_date=entries[0].start_date,
+            playlist_name=entries[0].playlist_name,
+            playlist_image_url=entries[0].playlist_image_url,
+        )
+        last_entry = RecapEntryHighlight(
+            start_date=entries[-1].start_date,
+            playlist_name=entries[-1].playlist_name,
+            playlist_image_url=entries[-1].playlist_image_url,
+        )
+
+    contributors_by_id: dict[int, User] = {}
+    for entry in entries:
+        contributors_by_id[entry.owner.id] = entry.owner
+        for coauthor in entry.coauthors:
+            contributors_by_id[coauthor.id] = coauthor
+    # Only an interesting "who showed up this year" story once there's
+    # more than one person - a solo workspace's list of exactly itself
+    # is trivial, so it's left empty rather than shown.
+    contributors = (
+        [UserPublic.model_validate(user) for user in sorted(contributors_by_id.values(), key=lambda u: u.username.lower())]
+        if len(contributors_by_id) > 1
+        else []
+    )
+
+    playlist_stats: dict[str, dict] = {}
+    for entry in entries:
+        stat = playlist_stats.setdefault(
+            entry.playlist_id,
+            {"name": entry.playlist_name, "image_url": entry.playlist_image_url, "count": 0},
+        )
+        stat["count"] += 1
+    top_playlists = sorted(
+        (
+            RecapPlaylistCount(
+                playlist_id=playlist_id,
+                playlist_name=stat["name"],
+                playlist_image_url=stat["image_url"],
+                count=stat["count"],
+            )
+            for playlist_id, stat in playlist_stats.items()
+            if stat["count"] > 1  # "most-referenced" only means anything once something actually repeats
+        ),
+        key=lambda p: p.count,
+        reverse=True,
+    )[:RECAP_TOP_PLAYLISTS_LIMIT]
+
+    return WorkspaceRecapOut(
+        year=year,
+        entry_count=len(entries),
+        photo_count=photo_count,
+        top_tags=top_tags,
+        most_active_month=most_active_month,
+        first_entry=first_entry,
+        last_entry=last_entry,
+        contributors=contributors,
+        top_playlists=top_playlists,
+    )
+
+
+@router.get("/{workspace_id}/recap/{year}", response_model=WorkspaceRecapOut)
+def get_workspace_recap(
+    workspace_id: int,
+    year: int,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """Same visibility rule as reading the workspace's entries at all
+    (require_workspace_read_access) - a recap is an aggregate over
+    content the caller can already read, not a new disclosure, so it
+    isn't gated on share_token the way the public GET /api/shared-recap/
+    {token} endpoint is. Get-or-creates the underlying WorkspaceRecap row
+    on first view (see _get_or_create_recap) purely so share_token has
+    somewhere to live if the owner later decides to share this year -
+    that bookkeeping is incidental and available to any viewer, distinct
+    from actually turning sharing on/off, which stays owner-only below."""
+    require_workspace_read_access(workspace_id, db, current_user)
+    _get_or_create_recap(workspace_id, year, db)
+    db.commit()
+    return _compute_recap_stats(workspace_id, year, db)
+
+
+@router.post("/{workspace_id}/recap/{year}/share", response_model=RecapShareOut)
+def enable_workspace_recap_sharing(
+    workspace_id: int,
+    year: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Owner-only, the workspace-level analogue of entries.
+    enable_entry_sharing - the same "the entity's controlling party
+    decides what leaves it publicly" precedent, one level up (workspace
+    owner here, entry's primary author there). Idempotent: calling this
+    again while already shared returns the existing token rather than
+    rotating it, for the same reason entry sharing doesn't rotate on
+    repeat calls - a link already handed out shouldn't silently break."""
+    require_workspace_owner(workspace_id, db, current_user)
+    recap = _get_or_create_recap(workspace_id, year, db)
+    if recap.share_token is None:
+        recap.share_token = secrets.token_urlsafe(32)
+        db.commit()
+        db.refresh(recap)
+        logger.info(
+            "workspace.recap_sharing_enabled workspace_id=%s year=%s user_id=%s",
+            workspace_id, year, current_user.id,
+        )
+    return RecapShareOut(share_token=recap.share_token)
+
+
+@router.delete("/{workspace_id}/recap/{year}/share", status_code=204)
+def disable_workspace_recap_sharing(
+    workspace_id: int,
+    year: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Clears the share token - GET /api/shared-recap/{old-token} 404s
+    immediately afterward, same as disabling a single entry's share
+    link. Owner-only, same as enabling above. A harmless no-op if this
+    workspace+year was never shared (or never even viewed) in the first
+    place - nothing to revoke."""
+    require_workspace_owner(workspace_id, db, current_user)
+    recap = db.scalar(
+        select(WorkspaceRecap).where(WorkspaceRecap.workspace_id == workspace_id, WorkspaceRecap.year == year)
+    )
+    if recap is not None and recap.share_token is not None:
+        recap.share_token = None
+        db.commit()
+        logger.info(
+            "workspace.recap_sharing_disabled workspace_id=%s year=%s user_id=%s",
+            workspace_id, year, current_user.id,
+        )
     logger.warning("workspace.deleted workspace_id=%s by=%s", workspace_id, current_user.id)
