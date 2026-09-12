@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ApiError, createEntry } from '../api'
 import { useAuth } from '../auth/AuthContext'
+import { getRandomPrompt } from '../entryPrompts'
 import type { EntryLocation, JournalEntry, PlaylistResult } from '../types'
 import CoAuthorPicker from './CoAuthorPicker'
 import LocationPicker from './LocationPicker'
@@ -28,6 +29,14 @@ export default function NewEntryForm({ workspaceId, onCreated }: Props) {
   const [location, setLocation] = useState<EntryLocation | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A suggestion shown alongside the journal text field, never written
+  // into it - see entryPrompts.ts. null = the "Need inspiration?" control
+  // is collapsed; set only while the user has asked to see one.
+  const [prompt, setPrompt] = useState<string | null>(null)
+
+  function showAnotherPrompt() {
+    setPrompt((current) => getRandomPrompt(current))
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -60,6 +69,7 @@ export default function NewEntryForm({ workspaceId, onCreated }: Props) {
       setStartDate(today())
       setEndDate(today())
       setSpansMultipleDays(false)
+      setPrompt(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not save this memory. Try again.')
     } finally {
@@ -103,6 +113,25 @@ export default function NewEntryForm({ workspaceId, onCreated }: Props) {
       )}
 
       <label htmlFor="entry-text">Journal entry</label>
+
+      {prompt ? (
+        <div className="entry-prompt-suggestion">
+          <p>{prompt}</p>
+          <div className="entry-prompt-actions">
+            <button type="button" className="link-btn" onClick={showAnotherPrompt}>
+              Try another
+            </button>
+            <button type="button" className="link-btn" onClick={() => setPrompt(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className="link-btn entry-prompt-trigger" onClick={showAnotherPrompt}>
+          Need inspiration?
+        </button>
+      )}
+
       <textarea
         id="entry-text"
         rows={5}
