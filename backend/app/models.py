@@ -138,6 +138,7 @@ class Workspace(Base):
     entries: Mapped[list["JournalEntry"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     tags: Mapped[list["Tag"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     invites: Mapped[list["WorkspaceInvite"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    recaps: Mapped[list["WorkspaceRecap"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
 
 
 class WorkspaceMembership(Base):
@@ -201,6 +202,44 @@ class WorkspaceInvite(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="invites")
     inviter: Mapped["User"] = relationship(foreign_keys=[invited_by])
+
+
+class WorkspaceRecap(Base):
+    """One row per workspace+year - the anchor for that year's "wrapped"-
+    style summary (see routers/workspaces.py's recap endpoints and
+    schemas.WorkspaceRecapOut). Deliberately does NOT store the computed
+    stats themselves (entry/photo counts, top tags, most active month,
+    etc.) - those are always computed live from the workspace's entries
+    on every request instead of being cached here. A personal journal's
+    entries can be edited, tagged, photographed, or deleted well after
+    the fact (even for a past year), so a stored snapshot would risk
+    silently going stale; recomputing a handful of aggregate queries
+    over one workspace-year's entries is cheap enough at this app's
+    scale that there's no real cost to always being correct instead.
+
+    This row's job is narrower: get-or-created on first request (by
+    anyone with read access to the workspace - see
+    require_workspace_read_access) purely so share_token has somewhere
+    to live once the owner decides to share this year's recap, the same
+    role JournalEntry.share_token plays for a single entry - see that
+    column's comment for the full non-disclosure design reasoning, which
+    applies identically here. In-app viewing (via GET .../recap/{year})
+    only needs workspace read access, independent of share_token, the
+    same way a private entry stays visible to its own workspace
+    regardless of JournalEntry.is_public/share_token; only the separate
+    public GET /api/shared-recap/{token} endpoint requires an active
+    token."""
+
+    __tablename__ = "workspace_recaps"
+    __table_args__ = (UniqueConstraint("workspace_id", "year", name="uq_workspace_recap_workspace_year"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), nullable=False, index=True)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    share_token: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="recaps")
 
 
 class Tag(Base):
