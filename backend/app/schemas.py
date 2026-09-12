@@ -346,7 +346,11 @@ class RecapPlaylistCount(BaseModel):
     """A playlist referenced by more than one entry in the recapped year -
     see WorkspaceRecapOut.top_playlists, which is simply empty when no
     playlist repeats (a small workspace's every entry using a different
-    playlist is a completely normal, ungraded outcome, not an error)."""
+    playlist is a completely normal, ungraded outcome, not an error).
+    Entries with no playlist at all (see models.JournalEntry's comment)
+    are never counted here - "no playlist" isn't a playlist that can be
+    most-referenced, so those entries are excluded from this stat
+    entirely rather than being grouped together as if they shared one."""
 
     playlist_id: str
     playlist_name: str
@@ -362,7 +366,10 @@ class RecapEntryHighlight(BaseModel):
     side door."""
 
     start_date: date
-    playlist_name: str
+    # Null when this entry has no playlist yet - true for any entry
+    # synced from an offline draft (see models.JournalEntry's comment on
+    # playlist_id/name/url) until someone adds one via the edit form.
+    playlist_name: str | None
     playlist_image_url: str | None
 
 

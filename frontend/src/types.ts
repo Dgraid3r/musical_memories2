@@ -192,7 +192,9 @@ export interface RecapPlaylistCount {
 // deliberately never text or photos, see backend schemas.WorkspaceRecapOut.
 export interface RecapEntryHighlight {
   start_date: string
-  playlist_name: string
+  // Null when this entry has no playlist yet - see JournalEntry's own
+  // playlist_name comment.
+  playlist_name: string | null
   playlist_image_url: string | null
 }
 
