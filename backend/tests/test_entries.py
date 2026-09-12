@@ -340,6 +340,134 @@ def test_add_images_by_coauthor_succeeds(client, make_user, make_workspace, db_s
         (UPLOADS_DIR / image.filename).unlink(missing_ok=True)
 
 
+def test_add_images_rejects_disallowed_file_type(client, make_user, make_workspace, db_session):
+    """Before this fix, _save_images accepted any extension/content-type
+    with no allowlist at all - a plain file-type check closes that off."""
+    from app.models import EntryImage
+
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    entry_id = _create_entry(client, ws["id"], alice["headers"]).json()["id"]
+
+    res = client.post(
+        f"/api/workspaces/{ws['id']}/entries/{entry_id}/images",
+        headers=alice["headers"],
+        files=[("images", ("payload.exe", b"not-a-real-image", "application/octet-stream"))],
+    )
+    assert res.status_code == 400
+    assert db_session.query(EntryImage).filter_by(entry_id=entry_id).count() == 0
+
+
+def test_add_images_rejects_mismatched_extension_and_content_type(client, make_user, make_workspace, db_session):
+    """An image-looking filename with a non-image content-type (or vice
+    versa) must still be rejected - both have to pass the allowlist, not
+    just whichever one looks right."""
+    from app.models import EntryImage
+
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    entry_id = _create_entry(client, ws["id"], alice["headers"]).json()["id"]
+
+    res = client.post(
+        f"/api/workspaces/{ws['id']}/entries/{entry_id}/images",
+        headers=alice["headers"],
+        files=[("images", ("photo.png", b"fake bytes", "application/octet-stream"))],
+    )
+    assert res.status_code == 400
+    assert db_session.query(EntryImage).filter_by(entry_id=entry_id).count() == 0
+
+
+def test_add_images_rejects_oversized_file(client, make_user, make_workspace, db_session):
+    from app.models import EntryImage
+    from app.routers.entries import MAX_IMAGE_UPLOAD_BYTES
+
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    entry_id = _create_entry(client, ws["id"], alice["headers"]).json()["id"]
+
+    oversized = b"x" * (MAX_IMAGE_UPLOAD_BYTES + 1)
+    res = client.post(
+        f"/api/workspaces/{ws['id']}/entries/{entry_id}/images",
+        headers=alice["headers"],
+        files=[("images", ("big.png", oversized, "image/png"))],
+    )
+    assert res.status_code == 400
+    assert db_session.query(EntryImage).filter_by(entry_id=entry_id).count() == 0
+
+
+def test_add_images_accepts_file_at_the_size_limit(client, make_user, make_workspace, db_session):
+    """The cap is inclusive - exactly MAX_IMAGE_UPLOAD_BYTES must still be
+    accepted, only strictly more is rejected."""
+    from app.models import EntryImage
+    from app.routers.entries import MAX_IMAGE_UPLOAD_BYTES
+
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    entry_id = _create_entry(client, ws["id"], alice["headers"]).json()["id"]
+
+    exactly_at_limit = b"x" * MAX_IMAGE_UPLOAD_BYTES
+    res = client.post(
+        f"/api/workspaces/{ws['id']}/entries/{entry_id}/images",
+        headers=alice["headers"],
+        files=[("images", ("atlimit.png", exactly_at_limit, "image/png"))],
+    )
+    assert res.status_code == 201
+
+    stored = db_session.query(EntryImage).filter_by(entry_id=entry_id).all()
+    assert len(stored) == 1
+    for image in stored:
+        (UPLOADS_DIR / image.filename).unlink(missing_ok=True)
+
+
+def test_add_images_batch_with_one_invalid_file_saves_nothing(client, make_user, make_workspace, db_session):
+    """A rejected file anywhere in a multi-file batch discards the whole
+    request rather than silently saving only the files that came before
+    it."""
+    from app.models import EntryImage
+
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+    entry_id = _create_entry(client, ws["id"], alice["headers"]).json()["id"]
+
+    res = client.post(
+        f"/api/workspaces/{ws['id']}/entries/{entry_id}/images",
+        headers=alice["headers"],
+        files=[
+            ("images", ("good.png", b"fake image bytes", "image/png")),
+            ("images", ("bad.exe", b"not an image", "application/octet-stream")),
+        ],
+    )
+    assert res.status_code == 400
+    assert db_session.query(EntryImage).filter_by(entry_id=entry_id).count() == 0
+
+
+def test_create_entry_rejects_disallowed_image_file_type(client, make_user, make_workspace, db_session):
+    """The same validation applies at entry-creation time too, not just
+    add_images - both call _save_images, and neither the entry nor an
+    EntryImage row should survive a rejected upload."""
+    from app.models import EntryImage, JournalEntry
+
+    alice = make_user("alice")
+    ws = make_workspace(alice)
+
+    res = client.post(
+        f"/api/workspaces/{ws['id']}/entries",
+        headers=alice["headers"],
+        data={
+            "start_date": "2026-01-01",
+            "text": "hello",
+            "playlist_id": "p1",
+            "playlist_name": "Test Playlist",
+            "playlist_url": "https://open.spotify.com/playlist/p1",
+            "is_public": "false",
+        },
+        files=[("images", ("payload.exe", b"not an image", "application/octet-stream"))],
+    )
+    assert res.status_code == 400
+    assert db_session.query(JournalEntry).count() == 0
+    assert db_session.query(EntryImage).count() == 0
+
+
 def test_add_images_to_nonexistent_entry_returns_404(client, make_user, make_workspace):
     alice = make_user("alice")
     ws = make_workspace(alice)
