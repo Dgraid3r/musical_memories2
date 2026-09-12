@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import date
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import get_current_user, get_current_user_optional
 from ..database import get_db
 from ..models import EntryEditEvent, EntryImage, JournalEntry, Tag, User, WorkspaceMembership
-from ..schemas import EntryEditEventOut, JournalEntryOut, JournalEntryUpdate
+from ..schemas import EntryEditEventOut, EntryShareOut, JournalEntryOut, JournalEntryUpdate
 from ..storage import get_storage
 from .workspaces import (
     WRITE_ROLES,
@@ -571,6 +572,68 @@ def delete_entry(
     db.commit()
     delete_stored_images(image_filenames)
     logger.info("entry.deleted workspace_id=%s entry_id=%s user_id=%s", workspace_id, entry_id, current_user.id)
+
+
+@router.post("/{entry_id}/share", response_model=EntryShareOut)
+def enable_entry_sharing(
+    workspace_id: int,
+    entry_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Turns on a public, unauthenticated link to this one entry (see
+    routers/sharing.py's GET /api/shared/{token}) - independent of
+    is_public/Workspace.visibility, so a private entry in a private
+    workspace is still individually shareable this way.
+
+    Only the primary author can toggle sharing, not a co-author - the
+    same extra visibility-control power the primary author already holds
+    over is_public, co-authors, and deletion above (see update_entry/
+    delete_entry).
+
+    Idempotent: calling this again while already shared returns the
+    existing token rather than rotating it - rotating on every call
+    would silently break a link someone was already given, for no
+    benefit, since generating a genuinely *new* link is what disabling
+    and re-enabling is for."""
+    require_workspace_write_access(workspace_id, db, current_user)
+    entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
+    if not _is_owner(entry, current_user):
+        raise HTTPException(status_code=403, detail="Only the primary author can share this entry")
+
+    if entry.share_token is None:
+        entry.share_token = secrets.token_urlsafe(32)
+        db.commit()
+        db.refresh(entry)
+        logger.info(
+            "entry.sharing_enabled workspace_id=%s entry_id=%s user_id=%s", workspace_id, entry_id, current_user.id
+        )
+
+    return EntryShareOut(share_token=entry.share_token)
+
+
+@router.delete("/{entry_id}/share", status_code=204)
+def disable_entry_sharing(
+    workspace_id: int,
+    entry_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Clears the share token, immediately invalidating any previously-
+    shared link - GET /api/shared/{old-token} 404s right after this
+    commits, the same non-disclosure 404 it would give a token that
+    never existed. Only the primary author, same as enable above."""
+    require_workspace_write_access(workspace_id, db, current_user)
+    entry = _get_entry_in_workspace_or_404(entry_id, workspace_id, db)
+    if not _is_owner(entry, current_user):
+        raise HTTPException(status_code=403, detail="Only the primary author can share this entry")
+
+    if entry.share_token is not None:
+        entry.share_token = None
+        db.commit()
+        logger.info(
+            "entry.sharing_disabled workspace_id=%s entry_id=%s user_id=%s", workspace_id, entry_id, current_user.id
+        )
 
 
 @image_router.get("/{entry_id}/images/{image_id}")

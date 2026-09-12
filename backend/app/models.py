@@ -259,6 +259,25 @@ class JournalEntry(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    # Unguessable public-link token for sharing this one entry, generated
+    # the same way (secrets.token_urlsafe) as invite/verification/reset
+    # tokens elsewhere in this app - None means not shared. Deliberately
+    # separate from is_public/Workspace.visibility: those two control
+    # whether *workspace members* (or anonymous visitors, for a public
+    # workspace) can see the entry through the normal app; this is an
+    # independent, per-entry public link that works even for a private
+    # entry in a private workspace, since the whole point is sharing one
+    # specific memory without exposing anything else. See
+    # routers/entries.py's enable_entry_sharing/disable_entry_sharing
+    # (only the primary author may toggle it) and routers/sharing.py's
+    # separate, minimal, unauthenticated GET /api/shared/{token} surface
+    # that reads it - never JournalEntryOut, which exposes only the
+    # derived is_shared boolean below, not the token itself, so a
+    # co-author or fellow workspace member who can merely *view* this
+    # entry can never read out - and thus can't distribute - the actual
+    # link the primary author generated.
+    share_token: Mapped[str | None] = mapped_column(String, unique=True, nullable=True, index=True)
+
     # Maintained by Postgres triggers (see the DDL below) from `text` plus
     # this entry's tag names - never written from Python. Nullable because
     # the trigger populates it only after the row (and its tags) exist.
@@ -289,6 +308,10 @@ class JournalEntry(Base):
     @property
     def owner_username(self) -> str:
         return DELETED_USER_DISPLAY_NAME if self.owner.is_deleted else self.owner.username
+
+    @property
+    def is_shared(self) -> bool:
+        return self.share_token is not None
 
 
 class EntryImage(Base):
