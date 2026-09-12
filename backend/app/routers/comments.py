@@ -102,9 +102,20 @@ def update_comment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Editing requires the caller to *currently* hold write access
+    (owner or member role) in the comment's workspace, the same bar
+    create_comment already requires to post one in the first place - not
+    just having been the author at some point in the past. Without this,
+    a member demoted to subscriber (or removed from the workspace
+    entirely, if the workspace happens to still be readable to them some
+    other way) would keep standing rewrite power over everything they
+    ever posted, which contradicts subscriber being a read-only role.
+    Deleting your own comment is deliberately NOT held to this same bar -
+    see delete_comment below for why that's a different judgment call."""
     comment = _visible_comment_or_404(comment_id, db, current_user)
     if comment.author_id != current_user.id:
         raise HTTPException(status_code=403, detail="Only the comment's author can edit it")
+    require_workspace_write_access(comment.entry.workspace_id, db, current_user)
 
     comment.body = payload.body
     comment.edited_at = datetime.utcnow()
@@ -119,12 +130,18 @@ def delete_comment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """A comment's own author can always delete it. The entry's primary
-    author can additionally delete *any* comment on their own entry
-    (moderation) - the same extra power the primary author already has over
-    visibility, co-authors, and entry deletion. Co-authors get none of that:
-    they can comment like anyone else with view access, but they don't get
-    moderation power just because they can edit the entry's text."""
+    """A comment's own author can always delete it - deliberately NOT
+    gated on still holding write access to the workspace, unlike editing
+    (see update_comment above): retracting your own words isn't a write
+    privilege in the same sense actively rewriting them is, so a member
+    later demoted to subscriber can still take down something they
+    posted while they had write access, even though they could no longer
+    edit it. The entry's primary author can additionally delete *any*
+    comment on their own entry (moderation) - the same extra power the
+    primary author already has over visibility, co-authors, and entry
+    deletion. Co-authors get none of that: they can comment like anyone
+    else with view access, but they don't get moderation power just
+    because they can edit the entry's text."""
     comment = _visible_comment_or_404(comment_id, db, current_user)
 
     is_author = comment.author_id == current_user.id
