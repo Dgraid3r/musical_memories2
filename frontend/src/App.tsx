@@ -64,6 +64,12 @@ function useGoogleSignInNotice(): string | null {
       setNotice('That account has been deleted and can no longer be signed into.')
     } else if (googleResult === 'account_deactivated') {
       setNotice('That account has been deactivated. Contact an admin if you think this is a mistake.')
+    } else if (googleResult === 'email_unverified_conflict') {
+      setNotice(
+        'An account with this email already exists but has not verified its address yet, so it ' +
+          "cannot be linked to Google sign-in automatically. Log in with that account's password and " +
+          'verify its email first, or contact support if you no longer have access to it.'
+      )
     } else {
       setNotice('Google sign-in could not be completed - please try again.')
     }
