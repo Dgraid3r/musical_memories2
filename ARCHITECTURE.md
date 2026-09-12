@@ -17,14 +17,13 @@ setup steps.
 | Backend language/framework | Python + FastAPI | Node/Express, Django | FastAPI generates request validation and API documentation automatically from Python type hints, which keeps the codebase small and catches a whole category of "sent the wrong shape of data" bugs before they ever reach your code. Django would have been heavier than this app needs (it ships an admin panel, template engine, and ORM conventions this app doesn't use). |
 | Database | PostgreSQL | SQLite (what this app actually started on) | SQLite is a single file on disk — great for a quick prototype, but it doesn't handle multiple people writing to the same data at once well, doesn't have real user accounts/permissions at the database level, and critically for this app, doesn't have the built-in full-text search and data-integrity features (like enforcing "a tag name must be unique within one workspace") that entries and search now depend on. Postgres is a real client-server database built for exactly this. See "Full-text search" below for the specific feature that made switching worth it. |
 | Database access layer | SQLAlchemy | Writing raw SQL by hand | SQLAlchemy lets the Python code describe data as objects (a `JournalEntry` has a `.tags` list) instead of hand-writing SQL joins everywhere, while still allowing raw SQL for the handful of places (full-text search, the tag-sync triggers) where Postgres's own features are better than anything an object layer could express. |
-| Schema migrations | Alembic | Just changing the code and hoping | Alembic is SQLAlchemy's companion tool for **migrations** — versioned, one-way instructions for changing a database's structure ("add this column," "create this table") that get applied in order and are safe to re-run. Without it, every change to what data looks like would mean manually running SQL against a live database and hoping every environment (your laptop, a teammate's laptop, production) stays in sync. There are 6 migrations in `backend/alembic/versions/` today, one per structural change the app has needed. |
+| Schema migrations | Alembic | Just changing the code and hoping | Alembic is SQLAlchemy's companion tool for **migrations** — versioned, one-way instructions for changing a database's structure ("add this column," "create this table") that get applied in order and are safe to re-run. Without it, every change to what data looks like would mean manually running SQL against a live database and hoping every environment (your laptop, a teammate's laptop, production) stays in sync. `backend/alembic/versions/` holds one migration per structural change the app has needed so far (a dozen-plus as of this writing, and growing) — a dedicated test (`backend/tests/test_schema_drift.py`) now also checks that running them all produces the exact schema the models declare, so the two can't silently drift apart. |
 | Spotify integration | Spotipy | Calling Spotify's HTTP API directly | Spotipy is a well-maintained Python wrapper around Spotify's Web API that handles the fiddly parts of authentication token exchange and refresh, so the app's own code stays focused on "what do we do with the playlist data" rather than "how do we sign this HTTP request." |
 | Local login | PyJWT + bcrypt | Rolling your own session system, or a third-party auth provider (Auth0, Firebase Auth, etc.) | bcrypt is the standard way to store a password: it turns a password into a scrambled value that can be checked against but never reversed back into the original password, even if the database leaks. JWT ("JSON Web Token") is a signed, tamper-proof token the server hands the browser after login instead of a plaintext session cookie — the server can verify it's genuine without having to look anything up in a database on every request. A third-party auth provider would add an external dependency and a per-user cost for what a few dozen lines of well-understood code already does correctly for a small app like this. |
 | Frontend | React + TypeScript + Vite | Plain JavaScript, or a server-rendered template | React lets the UI be built out of reusable pieces (a "component" per concept — an entry card, a comment thread) instead of one large tangle of DOM manipulation. TypeScript adds type-checking to JavaScript, which catches "you're passing the wrong shape of data to this component" mistakes before the code ever runs, the same benefit FastAPI's type hints give the backend. Vite is the build tool that turns that code into something a browser can run quickly, both during development (near-instant reload on save) and for the final production bundle. |
 
 ## The data model
 
-Six kinds of things live in the database, plus two small helper tables.
 Every one of the "content" tables — entries, tags, comments — ultimately
 belongs to exactly one **workspace** (explained in its own section below),
 which is what keeps different groups' journals from ever mixing.
@@ -32,8 +31,31 @@ which is what keeps different groups' journals from ever mixing.
 ### Users (`users`)
 
 A registered account: username, email, a bcrypted password hash, and when
-they signed up. Nothing else — no profile fields, no settings — lives on
-the user record today.
+they signed up. Beyond that, a handful of account-level flags rather than
+profile fields:
+
+- `email_verified` — set once the emailed verification link is clicked.
+  Tracked, but nothing in the app currently enforces it against normal
+  use (see "Invites, email verification, and password reset" in the
+  README).
+- `deleted_at` — null means "not deleted"; set once, permanently, on
+  self-deletion (`DELETE /api/account`). The row itself is never removed
+  — every entry/comment this user authored keeps its real foreign key
+  and survives untouched, so deleting your account doesn't retroactively
+  break other people's workspaces — only this user's own identifying
+  fields (username, email, password) get scrubbed, and the app renders a
+  generic "Deleted user" in their place anywhere it would otherwise show
+  their name.
+- `google_sub` — Google's stable per-account identifier, set once a
+  local account has been linked to (or created by) Google Sign-In; null
+  for a local-only account. See "Three separate auth systems" below.
+- `is_admin` / `is_active` — site-wide admin access and a reversible,
+  admin-initiated login block, both entirely separate from a workspace
+  role (which only governs one workspace, not the platform). `is_admin`
+  is granted with `python -m scripts.grant_admin <username>`, never a
+  web endpoint — an admin-granting endpoint would itself need an admin
+  to already exist to call it, which doesn't help for the very first
+  one.
 
 ### Workspaces (`workspaces`) and memberships (`workspace_memberships`)
 
@@ -49,10 +71,12 @@ has several members — this is a many-to-many relationship, which always
 needs its own connecting table rather than a single column on either side.
 Each membership row is one (user, workspace) pair plus a **role**:
 
-- **owner** — created the workspace (or was made owner by... nothing yet;
-  there's no ownership-transfer feature — see `ROADMAP.md`). Can invite and
-  remove members, change a member's role, toggle the workspace between
-  public and private, and delete the whole workspace.
+- **owner** — created the workspace, or was made owner by the previous
+  owner handing it off (`PATCH /api/workspaces/{id}/transfer-ownership`
+  — atomic, so a workspace always has exactly one owner; the target must
+  already be a member). Can invite and remove members, change a
+  member's role, toggle the workspace between public and private, and
+  delete the whole workspace.
 - **member** — full read/write access: create entries, add photos, tag,
   comment, add co-authors. Everything except the owner-only powers above.
 - **subscriber** — read-only. Can read every entry and comment a member
@@ -65,16 +89,31 @@ Each membership row is one (user, workspace) pair plus a **role**:
 The core content: a date (or date range — `start_date`/`end_date`, equal
 for a single-day memory), an optional text note, a Spotify playlist
 (id/name/URL/cover image — always a playlist, even for a single song, per
-the product's own rule), and an `is_public` flag.
+the product's own rule), an `is_public` flag, and an optional location
+(`latitude`/`longitude`/`location_name`) — set explicitly by the author
+via a backend-proxied OpenStreetMap search, never inferred or captured
+automatically; the three columns are independently nullable, but the API
+treats them as set-or-cleared together.
 
 Every entry belongs to exactly one **primary author** (the `user_id`
 column) and can have any number of **co-authors** (a separate
 `entry_coauthors` join table, the same many-to-many pattern as workspace
 membership). The primary author can toggle visibility, manage co-authors,
-and delete the entry; co-authors can edit its text, tags, and photos, but
-not those three things. Co-authors must already hold a write role (owner
-or member) in the entry's workspace — a subscriber can never be added as
-one, since that would hand them write access through the back door.
+and delete the entry; co-authors can edit its text, tags, location, and
+photos, but not those three things. Co-authors must already hold a write
+role (owner or member) in the entry's workspace — a subscriber can never
+be added as one, since that would hand them write access through the
+back door.
+
+### Entry edit history (`entry_edit_events`)
+
+An audit log, not version history: one row per edit made to an entry
+after creation (who, when, and a short label like "content"/"tags"/
+"visibility"/"coauthors"/"images" for roughly what changed), with no
+snapshot of the old or new content anywhere. Enough to answer "who
+changed this and when" without building actual diffing or a restore/
+rollback feature. Read back via `GET
+/api/workspaces/{id}/entries/{entry_id}/edit-history`.
 
 ### Tags (`tags`) and the entry-tag link (`entry_tags`)
 
@@ -95,14 +134,46 @@ rather than a separate table per nesting level.
 
 ### Photos (`entry_images`)
 
-One row per uploaded photo on an entry: which entry it belongs to, and the
-filename it was saved under on local disk (see "What's next" in
-`ROADMAP.md` for why "local disk" is a known limitation, not a permanent
-design).
+One row per uploaded photo on an entry: which entry it belongs to, and
+the filename it was saved under in whichever storage backend is
+currently configured — local disk by default, or any S3-compatible
+object storage (AWS S3, Cloudflare R2, Backblaze B2, etc.) once
+`OBJECT_STORAGE_*` is set (see `backend/app/storage.py` and the README's
+"Entry photos" section). The database row itself doesn't change based on
+which backend is active — only where those bytes actually live does.
+Uploads are validated (an image-type allowlist, a per-file size cap)
+before ever reaching either backend.
+
+### Invite and account-recovery tokens
+
+Three small, purpose-specific tables (`workspace_invites`,
+`email_verification_tokens`, `password_reset_tokens`), each holding an
+unguessable random token plus an expiry:
+
+- **`workspace_invites`** — a pending invitation to join a workspace by
+  email address (not an existing username), with a role to grant on
+  acceptance and separate `accepted_at`/`revoked_at` markers. Joining a
+  workspace is consent-based: a membership row is only ever created when
+  the invitee actively accepts (or registers with the invite's token),
+  never unilaterally by the owner.
+- **`email_verification_tokens`** — at most one live row per user;
+  resending replaces it rather than accumulating old ones, and it's
+  deleted outright on successful verification.
+- **`password_reset_tokens`** — a user can have several at once (each
+  request makes a new one), but requesting a new one marks every earlier
+  still-live token as used, so only the most recently requested link is
+  ever actually usable.
+
+### Backup runs (`backup_runs`)
+
+One row per `scripts/backup_database.py` attempt, success or failure,
+written by that script itself — read back by `GET /api/admin/stats` so
+an admin can see the most recent backup's outcome without reading logs.
+An operational record, not per-account data; nothing else references it.
 
 ### Spotify tokens (`spotify_tokens`)
 
-One row per user who has linked their own Spotify account (see "Two
+One row per user who has linked their own Spotify account (see "Three
 separate auth systems" below) — the access and refresh tokens Spotify
 issued them, encrypted (see "Security posture"). This table is
 deliberately **not** scoped to a workspace: your own linked Spotify
@@ -124,15 +195,29 @@ User ──< WorkspaceMembership >── Workspace
   └── SpotifyToken (one-to-one, not workspace-scoped)
 ```
 
-## Two separate auth systems, on purpose
+## Three separate auth systems, on purpose
 
-The app has two independent ways it deals with "who is this," and they're
-kept deliberately separate rather than merged into one:
+The app has three independent ways it deals with "who is this," and
+they're kept deliberately separate rather than merged into one:
 
 1. **Local login** (username + password, described above) is how you get
    into the app at all. It's required for everything except reading a
    *public* workspace's entries (see below).
-2. **Spotify account linking** (OAuth "Authorization Code" flow — the
+2. **Google Sign-In** (OAuth "Authorization Code" flow, ending in a
+   verified OpenID Connect identity token) is an *additive* alternative
+   way to get into the app, not a replacement for local login — both
+   keep working side by side. Signing in with Google either creates a
+   brand-new account (if no local account uses that email yet) or, if
+   one already exists with that exact email, links the two so either
+   sign-in method works from then on. That auto-link only happens when
+   the existing local account's own email is already verified
+   (`User.email_verified`) — local registration never requires proving
+   email ownership, so without that check, someone could register a
+   victim's email address themselves first and have Google's later,
+   genuinely-verified sign-in silently hand them the keys to an account
+   they don't own. An unverified match is refused as an explicit
+   conflict instead of linked or silently duplicated.
+3. **Spotify account linking** (OAuth "Authorization Code" flow — the
    standard way a website asks *"can this app see your Spotify data,
    specifically yours"* and gets a token back from Spotify itself, rather
    than ever seeing your Spotify password) is optional and additive. It
@@ -141,19 +226,23 @@ kept deliberately separate rather than merged into one:
    my own playlists" alongside the public catalog search that already
    worked without it.
 
-Why not just make Spotify login *be* the app's login? Because they answer
-different questions. Local login answers "which account is this," and
-doesn't require a Spotify account to exist at all — someone can use this
-app to journal without ever connecting Spotify (playlist search still
-works via the app's own catalog access, described next). Spotify linking
-answers "has this account also granted us access to their own Spotify
-library," which is optional, revocable, and unrelated to whether they can
-log in. Bundling them together would mean nobody could use the app without
-a Spotify account, and losing Spotify access (a revoked grant, an expired
-token) would lock someone out of their own journal — a failure completely
-unrelated to whether they remember their password.
+Why not just make Spotify login (or Google login) *be* the app's login?
+Because they answer different questions. Local login answers "which
+account is this," and doesn't require a Spotify or Google account to
+exist at all — someone can use this app to journal with just a
+username/password, or with Google, or both. Spotify linking answers "has
+this account also granted us access to their own Spotify library," which
+is optional, revocable, and unrelated to whether they can log in.
+Bundling any of these together would mean nobody could use the app
+without a Spotify account, and losing Spotify access (a revoked grant, an
+expired token) would lock someone out of their own journal — a failure
+completely unrelated to whether they remember their password. Google
+Sign-In is different in kind from Spotify linking, though: it's a way to
+*authenticate into this app itself*, not a grant of access to some other
+service's data — closer in spirit to local login than to Spotify linking,
+just via a different identity provider.
 
-There's also a third, unrelated Spotify credential: the app's own
+There's also a fourth, unrelated Spotify credential: the app's own
 **client-credentials** connection to Spotify (`SPOTIFY_CLIENT_ID`/
 `SPOTIFY_CLIENT_SECRET`), which powers the public catalog search everyone
 gets regardless of login. That's the app authenticating as *itself* to
