@@ -31,10 +31,40 @@ export class ApiError extends Error {
   }
 }
 
+/** A FastAPI/Pydantic 422's `detail` is an array of per-field validation
+ * errors, not a plain string - e.g. a too-short username comes back as
+ * `{"detail": [{"loc": ["body", "username"], "msg": "String should have
+ * at least 3 characters", ...}]}`. Used only by parseErrorMessage below,
+ * which is otherwise the single place every API call in this file reads
+ * a failed response's error message from - fixing it here means a real,
+ * specific validation message (not a generic fallback) surfaces for
+ * every form in the app that hits a 422, not just registration. */
+interface FastApiValidationErrorItem {
+  loc: (string | number)[]
+  msg: string
+}
+
+function fieldNameFromLoc(loc: (string | number)[]): string | null {
+  // loc is typically ["body", "<field>"] (or deeper for a nested model) -
+  // the field name is the last string segment, skipping the leading
+  // "body"/"query"/"path" location marker.
+  const field = [...loc].reverse().find((part) => typeof part === 'string' && part !== 'body')
+  return typeof field === 'string' ? field : null
+}
+
 async function parseErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
     const body = await res.json()
     if (typeof body?.detail === 'string') return body.detail
+    if (Array.isArray(body?.detail)) {
+      const messages = (body.detail as FastApiValidationErrorItem[])
+        .filter((item) => typeof item?.msg === 'string')
+        .map((item) => {
+          const field = fieldNameFromLoc(item.loc ?? [])
+          return field ? `${field}: ${item.msg}` : item.msg
+        })
+      if (messages.length > 0) return messages.join(' ')
+    }
   } catch {
     // response wasn't JSON - fall through to the generic message
   }
