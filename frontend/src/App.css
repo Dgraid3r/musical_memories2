@@ -217,6 +217,16 @@ h3 {
   font: inherit;
 }
 
+/* Small, unobtrusive per-field rule text (e.g. username's allowed
+   characters, password's minimum length) shown right under the input
+   it describes - same small-caption treatment as .my-invite-meta
+   elsewhere in this app, not a full .hint-sized paragraph. */
+.field-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 .auth-form button[type='submit'] {
   margin-top: 16px;
   background: var(--accent);

@@ -72,6 +72,15 @@ export default function AuthForm({ inviteToken, prefillEmail, initialMode, onFor
 
         <label htmlFor="auth-username">Username</label>
         <input id="auth-username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+        {/* Matches backend/app/schemas.py's UserCreate.username Field exactly
+         * (min_length=3, max_length=50, pattern=^[a-zA-Z0-9_.-]+$) - shown
+         * up front so a too-short/invalid username never has to round-trip
+         * to the server to find out why (see also parseErrorMessage in
+         * api.ts, which now surfaces the real 422 detail for whatever this
+         * hint doesn't catch, e.g. a username that's already taken). */}
+        {mode === 'register' && (
+          <p className="field-hint">3-50 characters: letters, numbers, underscores, periods, and hyphens only.</p>
+        )}
 
         {mode === 'register' && (
           <>
@@ -96,6 +105,8 @@ export default function AuthForm({ inviteToken, prefillEmail, initialMode, onFor
           minLength={mode === 'register' ? 8 : undefined}
           required
         />
+        {/* Matches UserCreate.password's min_length=8. */}
+        {mode === 'register' && <p className="field-hint">At least 8 characters.</p>}
 
         {error && <p className="error">{error}</p>}
 
