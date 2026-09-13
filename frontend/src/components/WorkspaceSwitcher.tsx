@@ -10,10 +10,6 @@ export default function WorkspaceSwitcher() {
   const [error, setError] = useState<string | null>(null)
 
   function handleSelect(e: React.ChangeEvent<HTMLSelectElement>) {
-    if (e.target.value === '__new__') {
-      setCreating(true)
-      return
-    }
     switchWorkspace(Number(e.target.value))
   }
 
@@ -55,18 +51,33 @@ export default function WorkspaceSwitcher() {
   }
 
   return (
-    <select
-      className="workspace-switcher"
-      value={activeWorkspace?.id ?? ''}
-      onChange={handleSelect}
-      aria-label="Active workspace"
-    >
-      {workspaces.map((w) => (
-        <option key={w.id} value={w.id}>
-          {w.name}
-        </option>
-      ))}
-      <option value="__new__">+ New workspace...</option>
-    </select>
+    <>
+      {/* A native <select> never fires `change` for clicking the option
+       * that's already showing/selected - "+ New workspace" used to be a
+       * pseudo-option inside this same <select>, which meant a brand-new
+       * user with zero real workspaces (so that pseudo-option is the only
+       * one in the list) had no way to trigger it at all. This is now a
+       * genuine button with its own click handler, always rendered
+       * regardless of how many workspaces exist; the <select> itself only
+       * ever lists real workspaces, and is omitted entirely rather than
+       * shown empty/disabled when there are none. */}
+      {workspaces.length > 0 && (
+        <select
+          className="workspace-switcher"
+          value={activeWorkspace?.id ?? ''}
+          onChange={handleSelect}
+          aria-label="Active workspace"
+        >
+          {workspaces.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+            </option>
+          ))}
+        </select>
+      )}
+      <button type="button" className="link-btn" onClick={() => setCreating(true)}>
+        + New workspace
+      </button>
+    </>
   )
 }
