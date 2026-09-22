@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchEntries, fetchPublicWorkspaces } from '../api'
+import { ApiError, fetchEntries, fetchPublicWorkspaces } from '../api'
 import type { JournalEntry, PublicWorkspace, PublicWorkspaceSort } from '../types'
 import EntryCard from './EntryCard'
 
@@ -20,6 +20,7 @@ export default function PublicWorkspaceBrowser({ onClose }: Props) {
   const [sort, setSort] = useState<PublicWorkspaceSort>('active')
   const [workspaces, setWorkspaces] = useState<PublicWorkspace[]>([])
   const [listLoading, setListLoading] = useState(true)
+  const [listError, setListError] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [selected, setSelected] = useState<PublicWorkspace | null>(null)
@@ -29,20 +30,28 @@ export default function PublicWorkspaceBrowser({ onClose }: Props) {
   // A new search or sort choice starts over from the first page.
   useEffect(() => {
     setListLoading(true)
+    setListError(null)
     fetchPublicWorkspaces({ q: query.trim() || undefined, sort, limit: PAGE_SIZE, offset: 0 })
       .then((page) => {
         setWorkspaces(page)
         setHasMore(page.length === PAGE_SIZE)
       })
-      .catch(() => {
+      .catch((err) => {
+        // Distinct from "genuinely zero public journals" - a failed
+        // request (backend unreachable, blocked by the browser, etc.)
+        // must never silently render the same "No public journals
+        // found" empty state, or a real problem looks identical to
+        // there just being nothing to browse.
         setWorkspaces([])
         setHasMore(false)
+        setListError(err instanceof ApiError ? err.message : 'Could not load public journals. Please try again.')
       })
       .finally(() => setListLoading(false))
   }, [query, sort])
 
   async function loadMore() {
     setLoadingMore(true)
+    setListError(null)
     try {
       const page = await fetchPublicWorkspaces({
         q: query.trim() || undefined,
@@ -52,8 +61,9 @@ export default function PublicWorkspaceBrowser({ onClose }: Props) {
       })
       setWorkspaces((prev) => [...prev, ...page])
       setHasMore(page.length === PAGE_SIZE)
-    } catch {
+    } catch (err) {
       setHasMore(false)
+      setListError(err instanceof ApiError ? err.message : 'Could not load more public journals. Please try again.')
     } finally {
       setLoadingMore(false)
     }
@@ -109,7 +119,8 @@ export default function PublicWorkspaceBrowser({ onClose }: Props) {
           </div>
 
           {listLoading && <p>Loading...</p>}
-          {!listLoading && workspaces.length === 0 && <p className="hint">No public journals found.</p>}
+          {listError && <p className="error">{listError}</p>}
+          {!listLoading && !listError && workspaces.length === 0 && <p className="hint">No public journals found.</p>}
 
           <ul className="public-workspace-list">
             {workspaces.map((w) => (

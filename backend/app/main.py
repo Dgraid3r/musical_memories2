@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -41,9 +42,55 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSO
     )
 
 
+def _cors_allowed_origins() -> list[str]:
+    """Browser-enforced origin allowlist - matters only for local dev (the
+    Vite dev server on its own origin talking to uvicorn on 8000). The
+    production image serves the built frontend from this same FastAPI
+    process (see the root Dockerfile) - a real deployment is always
+    same-origin and never depends on this list at all.
+
+    This used to be a single hardcoded "http://localhost:5173", which
+    silently broke the app from any other, equally legitimate local
+    origin - http://127.0.0.1:5173 instead of http://localhost:5173
+    (browsers treat these as different origins even though they're the
+    same machine), `vite preview`'s default port 4173 (vite.config.ts
+    already proxies /api there too), or a FRONTEND_URL override for a
+    non-default port. The failure is invisible from the server side:
+    CORS is enforced by the browser, not this API, so the request still
+    reaches the handler and gets a normal 200 - the browser just
+    withholds the response body from the page's own JS. For
+    GET /api/workspaces/public specifically (the one endpoint deliberately
+    designed to be called by a fully anonymous browser with no login and
+    no prior same-origin page load) that reads as "no public journals
+    found" - indistinguishable from there really being none - instead of
+    a visible error, which is exactly what made this so easy to miss:
+    curl and the pytest suite below both bypass CORS entirely, so neither
+    ever exercised the browser-enforced path that was actually broken.
+
+    Always includes the conventional Vite dev (5173) and `vite preview`
+    (4173) ports on both localhost and 127.0.0.1, plus FRONTEND_URL when
+    set (already used elsewhere for email links - see
+    routers/workspaces.py's _frontend_url()). Further origins - a LAN IP
+    for testing from another device, a staging domain fronting a split
+    frontend/backend deploy - can be added via the optional
+    comma-separated CORS_ALLOWED_ORIGINS without touching code."""
+    origins = {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    }
+    frontend_url = os.environ.get("FRONTEND_URL")
+    if frontend_url:
+        origins.add(frontend_url)
+    extra = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+    origins.update(origin.strip() for origin in extra.split(",") if origin.strip())
+    return sorted(origins)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=_cors_allowed_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
