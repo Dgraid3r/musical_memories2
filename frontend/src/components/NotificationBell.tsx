@@ -12,9 +12,8 @@ import type { Notification } from '../types'
 interface Props {
   /** Called (after the notification is already marked read) when a
    * "comment" notification with a real entry/workspace to go to is
-   * clicked - the caller (App.tsx) owns actually getting the user
-   * there, the same responsibility MapView.tsx's onViewEntry callback
-   * already has for the map's own "view this memory" action. */
+   * clicked - the caller (App.tsx) owns actually getting the user there
+   * (switching workspace/search state and scrolling the entry into view). */
   onNavigateToEntry: (workspaceId: number, entryId: number) => void
   /** Called for an "invite" notification, or any notification type this
    * component doesn't know how to deep-link (see models.Notification's

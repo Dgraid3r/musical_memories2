@@ -324,7 +324,7 @@ export async function deleteAccount(password: string, token: string): Promise<{ 
 /** Fetches the caller's data-export zip as a Blob - the caller is
  * responsible for turning it into an actual download (see
  * AccountSettings' use of URL.createObjectURL, the same pattern already
- * used for photo blobs in EntryPhoto/MapView). */
+ * used for photo blobs in EntryPhoto). */
 export async function exportAccountData(token: string): Promise<Blob> {
   const res = await fetch('/api/account/export', { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to export your data'))
@@ -398,9 +398,6 @@ export async function reverseGeocode(latitude: number, longitude: number): Promi
 export interface EntrySearchParams {
   q?: string
   tag?: string
-  /** Only entries with a location set - powers the map view. Same
-   * visibility rules as every other entry listing. */
-  locatedOnly?: boolean
   /** Same limit/offset pagination convention as fetchPublicWorkspaces
    * above - `offset` is how the caller pages through results ("load
    * more" - see App.tsx's entry list). Omitting `limit` gets the
@@ -417,7 +414,6 @@ export async function fetchEntries(
   const query = new URLSearchParams()
   if (params.q) query.set('q', params.q)
   if (params.tag) query.set('tag', params.tag)
-  if (params.locatedOnly) query.set('located_only', 'true')
   if (params.limit !== undefined) query.set('limit', String(params.limit))
   if (params.offset !== undefined) query.set('offset', String(params.offset))
   const qs = query.toString()

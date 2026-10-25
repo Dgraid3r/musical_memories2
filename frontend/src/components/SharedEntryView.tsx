@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ApiError, fetchSharedEntry } from '../api'
 import type { SharedEntry } from '../types'
+import EntryLocationMap from './EntryLocationMap'
 import SharedEntryPhoto from './SharedEntryPhoto'
 
 interface Props {
@@ -83,6 +84,13 @@ export default function SharedEntryView({ token }: Props) {
             {entry.location_name && (
               <div className="entry-location-row">
                 <span className="entry-location-name">&#128205; {entry.location_name}</span>
+                {entry.latitude !== null && entry.longitude !== null && (
+                  <EntryLocationMap
+                    latitude={entry.latitude}
+                    longitude={entry.longitude}
+                    locationName={entry.location_name}
+                  />
+                )}
               </div>
             )}
 
