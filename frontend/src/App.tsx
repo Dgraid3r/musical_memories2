@@ -7,7 +7,6 @@ import AuthForm from './components/AuthForm'
 import EntryCard from './components/EntryCard'
 import ForgotPasswordPage from './components/ForgotPasswordPage'
 import InviteAcceptPrompt from './components/InviteAcceptPrompt'
-import MapView from './components/MapView'
 import MyInvites from './components/MyInvites'
 import NewEntryForm from './components/NewEntryForm'
 import NotificationBell from './components/NotificationBell'
@@ -132,14 +131,13 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [showAccountSettings, setShowAccountSettings] = useState(false)
   const [showForgotPassword, setShowForgotPassword] = useState(false)
-  const [showMapView, setShowMapView] = useState(false)
   const [showAdminDashboard, setShowAdminDashboard] = useState(false)
   const [showMyInvites, setShowMyInvites] = useState(false)
   const [showRecap, setShowRecap] = useState(false)
-  // Set when a map pin's "View this memory" is clicked - closes the map
-  // and scrolls that entry's card into view once the (already-loaded)
-  // list is showing again. Cleared right after scrolling so it doesn't
-  // re-trigger on an unrelated re-render.
+  // Set when a "comment" notification's target entry should be scrolled
+  // into view once the (already-loaded) list is showing again. Cleared
+  // right after scrolling so it doesn't re-trigger on an unrelated
+  // re-render.
   const [scrollToEntryId, setScrollToEntryId] = useState<number | null>(null)
   const spotifyNotice = useSpotifyCallbackNotice()
   const googleNotice = useGoogleSignInNotice()
@@ -261,35 +259,27 @@ export default function App() {
     }
   }
 
-  // Runs after the map closes and the (unfiltered, already-loaded) list is
-  // showing again - the target entry is almost certainly already in
-  // `entries`, but if it isn't yet rendered this simply no-ops rather than
-  // erroring, and the id stays pending harmlessly until it is.
+  // The target entry is almost certainly already in `entries`, but if it
+  // isn't yet rendered this simply no-ops rather than erroring, and the id
+  // stays pending harmlessly until it is.
   useEffect(() => {
-    if (scrollToEntryId === null || showMapView) return
+    if (scrollToEntryId === null) return
     const el = document.getElementById(`entry-${scrollToEntryId}`)
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
       setScrollToEntryId(null)
     }
-  }, [scrollToEntryId, showMapView, entries])
-
-  function handleViewEntryFromMap(entryId: number) {
-    setShowMapView(false)
-    setScrollToEntryId(entryId)
-  }
+  }, [scrollToEntryId, entries])
 
   // A "comment" notification's target entry might not be in the
   // currently-loaded page (a different search filter, or just further
   // back than the first page) - clearing the search and switching to
   // the entry's own workspace maximizes the chance it's actually there
-  // once the list reloads. Same accepted limitation as
-  // handleViewEntryFromMap above if it still isn't: the scroll-target
-  // effect simply no-ops and the id stays pending harmlessly.
+  // once the list reloads. If it still isn't: the scroll-target effect
+  // simply no-ops and the id stays pending harmlessly.
   function handleNavigateToEntryFromNotification(workspaceId: number, entryId: number) {
     setShowMyInvites(false)
     setShowAdminDashboard(false)
-    setShowMapView(false)
     setSearchQuery('')
     if (workspaceId !== activeWorkspace?.id) {
       switchWorkspace(workspaceId)
@@ -299,7 +289,6 @@ export default function App() {
 
   function handleNavigateToInvitesFromNotification() {
     setShowAdminDashboard(false)
-    setShowMapView(false)
     setShowMyInvites(true)
   }
 
@@ -419,11 +408,6 @@ export default function App() {
             </button>
           )}
           {activeWorkspace && (
-            <button type="button" className="link-btn" onClick={() => setShowMapView((v) => !v)}>
-              {showMapView ? 'List view' : 'Map view'}
-            </button>
-          )}
-          {activeWorkspace && (
             <button type="button" className="link-btn" onClick={() => setShowRecap(true)}>
               Recap
             </button>
@@ -490,11 +474,7 @@ export default function App() {
           </p>
         )}
 
-        {activeWorkspace && showMapView && (
-          <MapView workspaceId={activeWorkspace.id} onViewEntry={handleViewEntryFromMap} />
-        )}
-
-        {activeWorkspace && !showMapView && (
+        {activeWorkspace && (
           <>
             {canWrite && online && (
               <NewEntryForm

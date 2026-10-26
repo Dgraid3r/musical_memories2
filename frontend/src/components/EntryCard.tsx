@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import type { EntryLocation, JournalEntry, PlaylistResult } from '../types'
 import CommentThread from './CommentThread'
 import EntryEditHistory from './EntryEditHistory'
+import EntryLocationMap from './EntryLocationMap'
 import EntryPhoto from './EntryPhoto'
 import LocationPicker from './LocationPicker'
 import PlaylistSearch from './PlaylistSearch'
@@ -288,6 +289,13 @@ export default function EntryCard({ entry, workspaceId, canWrite, onDelete, onUp
       ) : (
         <div className="entry-location-row">
           {entry.location_name && <span className="entry-location-name">&#128205; {entry.location_name}</span>}
+          {entry.latitude !== null && entry.longitude !== null && entry.location_name && (
+            <EntryLocationMap
+              latitude={entry.latitude}
+              longitude={entry.longitude}
+              locationName={entry.location_name}
+            />
+          )}
           {canEditContent && (
             <button type="button" className="link-btn" onClick={startEditingLocation}>
               {entry.location_name ? 'Edit location' : '+ Add location'}

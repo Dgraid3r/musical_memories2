@@ -891,6 +891,7 @@ h3 {
 .entry-location-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -969,11 +970,20 @@ h3 {
   margin: 0 auto;
 }
 
-/* --- Map view ------------------------------------------------------------ */
+/* --- Per-entry location map (EntryCard, SharedEntryView) ------------------ */
 
-.map-view-container {
-  height: 70vh;
-  min-height: 320px;
+.entry-location-map {
+  display: inline-flex;
+}
+
+.entry-location-map-popup {
+  width: 100%;
+  margin-top: 8px;
+  flex-basis: 100%;
+}
+
+.entry-location-map-container {
+  height: 220px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   z-index: 0;
@@ -986,44 +996,6 @@ h3 {
   transform: rotate(-45deg);
   background: var(--accent);
   border: 2px solid var(--surface);
-}
-
-.map-marker-thumb {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 2px solid var(--accent);
-  object-fit: cover;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-}
-
-.map-popup {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 180px;
-}
-
-.map-popup-date {
-  font-size: 0.78rem;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-}
-
-.map-popup button {
-  align-self: flex-start;
-  margin-top: 4px;
-  background: var(--accent);
-  color: var(--surface);
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 4px 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.map-popup button:hover {
-  background: var(--accent-hover);
 }
 
 .search-bar {
