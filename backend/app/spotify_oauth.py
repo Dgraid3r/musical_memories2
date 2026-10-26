@@ -37,7 +37,15 @@ from .spotify_retry import SpotifyUnavailableError, StatusCapturingSession, call
 
 logger = logging.getLogger(__name__)
 
-SCOPE = "playlist-read-private playlist-read-collaborative"
+# playlist-modify-private: creating a playlist from the entry picker
+# ("Create new playlist") makes it on the user's own account. Created
+# playlists are always private, so playlist-modify-public is deliberately
+# not requested. Accounts linked before this scope was added hold tokens
+# without it - see has_playlist_write_scope.
+PLAYLIST_WRITE_SCOPE = "playlist-modify-private"
+SCOPE = f"playlist-read-private playlist-read-collaborative {PLAYLIST_WRITE_SCOPE}"
+
+CREATED_PLAYLIST_DESCRIPTION = "Created with Musical Memories"
 
 
 class SpotifyOAuthNotConfigured(RuntimeError):
@@ -182,3 +190,66 @@ def get_user_playlists(access_token: str) -> list[PlaylistResult]:
         )
     logger.info("spotify.my_playlists succeeded results=%d", len(playlists))
     return playlists
+
+
+def has_playlist_write_scope(token: SpotifyToken) -> bool:
+    """Spotify reports granted scopes as one space-separated string, stored
+    as-is on SpotifyToken.scope. A token from before playlist creation
+    existed (or with no recorded scope at all) can't create playlists - the
+    user has to reconnect to grant it."""
+    granted = set((token.scope or "").split())
+    return PLAYLIST_WRITE_SCOPE in granted
+
+
+def create_user_playlist(access_token: str, name: str, track_uris: list[str]) -> PlaylistResult:
+    """Creates a private playlist on this user's own Spotify account and
+    adds `track_uris` to it (at most 100 - one add-items request).
+
+    Uses Spotify's current endpoints, POST /me/playlists and
+    POST /playlists/{id}/items. spotipy 2.24's user_playlist_create /
+    playlist_add_items still target the deprecated
+    /users/{id}/playlists and /playlists/{id}/tracks paths, so this goes
+    through spotipy's generic _post (same auth, session, and
+    SpotifyException error mapping) rather than those helpers.
+
+    status_retries=0: spotipy's transport-level retry also covers POST, and
+    a 5xx on the create call can still mean the playlist was made - blindly
+    replaying it could leave duplicate playlists on the user's account.
+    (call_with_retry's 429 handling stays: a 429 means nothing was done.)"""
+    sp = spotipy.Spotify(auth=access_token, status_retries=0)
+    try:
+        created = call_with_retry(
+            sp._post, "me/playlists",
+            payload={"name": name, "public": False, "description": CREATED_PLAYLIST_DESCRIPTION},
+            log_label="create_playlist",
+        )
+    except SpotifyUnavailableError:
+        logger.warning("spotify.create_playlist unavailable_after_retries")
+        raise
+    except Exception:
+        logger.exception("spotify.create_playlist failed")
+        raise
+
+    playlist_id = created["id"]
+    try:
+        call_with_retry(
+            sp._post, f"playlists/{playlist_id}/items",
+            payload={"uris": track_uris},
+            log_label="add_playlist_items",
+        )
+    except Exception:
+        # The (empty) playlist already exists on the user's account at this
+        # point - logged so it's traceable, then surfaced as a failure.
+        logger.exception("spotify.add_playlist_items playlist_id=%s failed", playlist_id)
+        raise
+
+    images = created.get("images") or []
+    logger.info("spotify.create_playlist succeeded playlist_id=%s tracks=%d", playlist_id, len(track_uris))
+    return PlaylistResult(
+        id=playlist_id,
+        name=created.get("name") or name,
+        url=(created.get("external_urls") or {}).get("spotify") or f"https://open.spotify.com/playlist/{playlist_id}",
+        image_url=images[0]["url"] if images else None,
+        owner=(created.get("owner") or {}).get("display_name") or "You",
+        track_count=len(track_uris),
+    )

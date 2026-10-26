@@ -93,6 +93,35 @@ export interface PlaylistResult {
   track_count: number
 }
 
+/** One catalog track from GET /api/spotify/tracks. */
+export interface TrackResult {
+  id: string
+  uri: string
+  name: string
+  artists: string
+  album: string | null
+  image_url: string | null
+  url: string | null
+  duration_ms: number | null
+}
+
+export interface SuggestedTrack {
+  title: string
+  artist: string
+}
+
+export interface PlaylistGenerateResult {
+  matched: TrackResult[]
+  unmatched: SuggestedTrack[]
+}
+
+export interface SpotifyStatus {
+  connected: boolean
+  /** False for accounts linked before playlist creation existed - they
+   * hold read-only tokens and must reconnect first. */
+  can_create_playlists: boolean
+}
+
 export interface User {
   id: number
   username: string

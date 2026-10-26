@@ -8,7 +8,7 @@ import spotipy
 from cachetools import TTLCache
 from spotipy.oauth2 import SpotifyClientCredentials
 
-from .schemas import PlaylistResult
+from .schemas import PlaylistResult, TrackResult
 from .spotify_retry import SpotifyUnavailableError, call_with_retry
 
 logger = logging.getLogger(__name__)
@@ -142,3 +142,54 @@ def search_playlists(query: str, limit: int = 10) -> list[PlaylistResult]:
     logger.info("spotify.search cache=miss query=%r limit=%d results=%d", query, limit, len(playlists))
     _search_cache[cache_key] = playlists
     return playlists
+
+
+# Spotify's search endpoint caps `limit` at 10 per request (and defaults to
+# 5) - asking for more is rejected, so clamp rather than pass it through.
+TRACK_SEARCH_MAX_LIMIT = 10
+
+
+def _track_from_item(item: dict) -> TrackResult:
+    album = item.get("album") or {}
+    images = album.get("images") or []
+    artists = [a.get("name") for a in (item.get("artists") or []) if a and a.get("name")]
+    return TrackResult(
+        id=item["id"],
+        uri=item.get("uri") or f"spotify:track:{item['id']}",
+        name=item["name"],
+        artists=", ".join(artists) or "Unknown artist",
+        album=album.get("name"),
+        image_url=images[-1]["url"] if images else None,
+        url=(item.get("external_urls") or {}).get("spotify"),
+        duration_ms=item.get("duration_ms"),
+    )
+
+
+def search_tracks(query: str, limit: int = TRACK_SEARCH_MAX_LIMIT) -> list[TrackResult]:
+    """Catalog track search on the shared app-only client - the same
+    cache/throttle/call_with_retry path as search_playlists above, keyed
+    separately (a "track" namespace in the same TTL cache) so a playlist
+    search and a track search for the same text never collide."""
+    limit = max(1, min(limit, TRACK_SEARCH_MAX_LIMIT))
+    cache_key = ("track", query, limit)
+    cached = _search_cache.get(cache_key)
+    if cached is not None:
+        logger.info("spotify.track_search cache=hit query=%r limit=%d results=%d", query, limit, len(cached))
+        return cached
+
+    _throttle()
+    try:
+        sp = get_spotify_client()
+        results = call_with_retry(sp.search, q=query, type="track", limit=limit, log_label="track_search")
+    except SpotifyUnavailableError:
+        logger.warning("spotify.track_search cache=miss query=%r limit=%d unavailable_after_retries", query, limit)
+        raise
+    except Exception:
+        logger.exception("spotify.track_search cache=miss query=%r limit=%d failed", query, limit)
+        raise
+    items = results.get("tracks", {}).get("items", []) if results else []
+
+    tracks = [_track_from_item(item) for item in items if item and item.get("id")]
+    logger.info("spotify.track_search cache=miss query=%r limit=%d results=%d", query, limit, len(tracks))
+    _search_cache[cache_key] = tracks
+    return tracks

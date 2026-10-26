@@ -1,7 +1,8 @@
+import re
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from .models import DELETED_USER_DISPLAY_NAME
 
@@ -206,6 +207,85 @@ class PlaylistResult(BaseModel):
     track_count: int
 
 
+class TrackResult(BaseModel):
+    """One catalog track from GET /api/spotify/tracks - what the
+    create-playlist panel lists and adds to its draft. `uri` is what
+    playlist creation actually sends back to Spotify."""
+
+    id: str
+    uri: str
+    name: str
+    artists: str
+    album: str | None = None
+    image_url: str | None = None
+    url: str | None = None
+    duration_ms: int | None = None
+
+
+# Spotify's add-items endpoint accepts at most 100 URIs per request - one
+# request is all a newly created playlist from this picker ever needs.
+MAX_PLAYLIST_CREATE_TRACKS = 100
+
+
+class PlaylistCreateInput(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    track_uris: list[str] = Field(min_length=1, max_length=MAX_PLAYLIST_CREATE_TRACKS)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Playlist name can't be blank")
+        return value
+
+    @field_validator("track_uris")
+    @classmethod
+    def _valid_track_uris(cls, value: list[str]) -> list[str]:
+        for uri in value:
+            if not re.fullmatch(r"spotify:track:[A-Za-z0-9]{22}", uri):
+                raise ValueError(f"Not a Spotify track URI: {uri!r}")
+        # Keep first occurrence order, drop accidental duplicates.
+        return list(dict.fromkeys(value))
+
+
+# The user's prompt only ever becomes the user turn of one Claude request -
+# short enough to describe a mood/theme, too short to smuggle in much else.
+MAX_GENERATE_PROMPT_LENGTH = 300
+
+
+class PlaylistGenerateInput(BaseModel):
+    prompt: str = Field(min_length=1, max_length=MAX_GENERATE_PROMPT_LENGTH)
+
+    @field_validator("prompt")
+    @classmethod
+    def _strip_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Describe the playlist you want")
+        return value
+
+
+class SuggestedTrack(BaseModel):
+    title: str
+    artist: str
+
+
+class PlaylistGenerateOut(BaseModel):
+    """`matched` pre-fills the create-playlist draft; `unmatched` lists
+    suggestions Spotify search couldn't find, shown so the user knows."""
+
+    matched: list[TrackResult]
+    unmatched: list[SuggestedTrack]
+
+
+class PlaylistGeneratorStatusOut(BaseModel):
+    """Whether "Generate from a prompt" can run on this server at all -
+    false until an ANTHROPIC_API_KEY is configured. Never carries the key."""
+
+    available: bool
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_.-]+$")
     email: EmailStr
@@ -283,6 +363,10 @@ class SpotifyStatusOut(BaseModel):
     stored tokens themselves - those are secrets and never leave the server."""
 
     connected: bool
+    # True only when the linked account's granted scopes include playlist
+    # write access - accounts linked before playlist creation existed hold
+    # read-only tokens and must reconnect first.
+    can_create_playlists: bool = False
 
 
 class GoogleSignInConfigOut(BaseModel):

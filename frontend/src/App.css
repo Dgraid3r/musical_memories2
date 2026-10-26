@@ -1028,6 +1028,7 @@ h3 {
 
 .playlist-source-toggle {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 4px;
 }
@@ -1046,6 +1047,76 @@ h3 {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
   border-color: transparent;
+}
+
+/* "Create new playlist" panel inside the playlist picker. */
+.create-playlist-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.create-playlist-connect {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 0.9rem;
+}
+
+.create-playlist-generate,
+.create-playlist-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.create-playlist-prompt {
+  align-self: stretch;
+}
+
+.create-playlist-prompt textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+}
+
+.track-results button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.create-playlist-unmatched ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.create-playlist-draft {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.create-playlist-draft li span {
+  margin-right: 8px;
+  overflow-wrap: anywhere;
+}
+
+.create-playlist-submit {
+  align-self: flex-start;
 }
 
 .public-browse-link {
