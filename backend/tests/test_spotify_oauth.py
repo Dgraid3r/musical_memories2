@@ -188,7 +188,7 @@ def test_status_reports_not_connected(client, make_user):
     alice = make_user("alice")
     res = client.get("/api/spotify/status", headers=alice["headers"])
     assert res.status_code == 200
-    assert res.json() == {"connected": False}
+    assert res.json() == {"connected": False, "can_create_playlists": False}
 
 
 def test_status_reports_connected(client, make_user, db_session):
@@ -207,7 +207,7 @@ def test_status_reports_connected(client, make_user, db_session):
 
     res = client.get("/api/spotify/status", headers=alice["headers"])
     assert res.status_code == 200
-    assert res.json() == {"connected": True}
+    assert res.json() == {"connected": True, "can_create_playlists": False}
 
 
 def test_status_response_never_contains_tokens(client, make_user, db_session):
