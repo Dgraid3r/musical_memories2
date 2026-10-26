@@ -11,3 +11,4 @@ backend/backups/*
 !backend/backups/.gitkeep
 frontend/dist/
 .pytest_cache/
+debug/
