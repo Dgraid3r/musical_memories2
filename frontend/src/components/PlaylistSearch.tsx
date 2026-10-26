@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ApiError, fetchMyPlaylists, fetchSpotifyStatus, searchPlaylists } from '../api'
 import { useAuth } from '../auth/AuthContext'
-import type { PlaylistResult } from '../types'
+import type { PlaylistResult, SpotifyStatus } from '../types'
+import CreatePlaylistPanel from './CreatePlaylistPanel'
 
 interface Props {
   selected: PlaylistResult | null
@@ -14,16 +15,17 @@ export default function PlaylistSearch({ selected, onSelect }: Props) {
   const [results, setResults] = useState<PlaylistResult[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [spotifyConnected, setSpotifyConnected] = useState(false)
-  const [showMyPlaylists, setShowMyPlaylists] = useState(false)
+  const [spotifyStatus, setSpotifyStatus] = useState<SpotifyStatus | null>(null)
+  const spotifyConnected = spotifyStatus?.connected ?? false
+  const [mode, setMode] = useState<'search' | 'mine' | 'create'>('search')
   const [myPlaylists, setMyPlaylists] = useState<PlaylistResult[]>([])
   const [loadingMyPlaylists, setLoadingMyPlaylists] = useState(false)
 
   useEffect(() => {
     if (!token) return
     fetchSpotifyStatus(token)
-      .then((s) => setSpotifyConnected(s.connected))
-      .catch(() => setSpotifyConnected(false))
+      .then(setSpotifyStatus)
+      .catch(() => setSpotifyStatus({ connected: false, can_create_playlists: false }))
   }, [token])
 
   useEffect(() => {
@@ -46,10 +48,9 @@ export default function PlaylistSearch({ selected, onSelect }: Props) {
     return () => clearTimeout(handle)
   }, [query])
 
-  function toggleMyPlaylists() {
-    const next = !showMyPlaylists
-    setShowMyPlaylists(next)
-    if (next && myPlaylists.length === 0 && token) {
+  function showMine() {
+    setMode('mine')
+    if (myPlaylists.length === 0 && token) {
       setLoadingMyPlaylists(true)
       fetchMyPlaylists(token)
         .then(setMyPlaylists)
@@ -60,24 +61,36 @@ export default function PlaylistSearch({ selected, onSelect }: Props) {
     }
   }
 
-  const listedPlaylists = showMyPlaylists ? myPlaylists : results
+  function handleCreated(playlist: PlaylistResult) {
+    onSelect(playlist)
+    setMode('search')
+  }
+
+  const listedPlaylists = mode === 'mine' ? myPlaylists : mode === 'search' ? results : []
 
   return (
     <div className="playlist-search">
       <label htmlFor="playlist-query">Spotify playlist</label>
 
-      {spotifyConnected && (
+      {token && (
         <div className="playlist-source-toggle">
-          <button type="button" className={!showMyPlaylists ? 'active' : ''} onClick={() => setShowMyPlaylists(false)}>
+          <button type="button" className={mode === 'search' ? 'active' : ''} onClick={() => setMode('search')}>
             Search Spotify
           </button>
-          <button type="button" className={showMyPlaylists ? 'active' : ''} onClick={toggleMyPlaylists}>
-            My playlists
+          {spotifyConnected && (
+            <button type="button" className={mode === 'mine' ? 'active' : ''} onClick={showMine}>
+              My playlists
+            </button>
+          )}
+          <button type="button" className={mode === 'create' ? 'active' : ''} onClick={() => setMode('create')}>
+            Create new playlist
           </button>
         </div>
       )}
 
-      {!showMyPlaylists && (
+      {mode === 'create' && <CreatePlaylistPanel spotifyStatus={spotifyStatus} onCreated={handleCreated} />}
+
+      {mode === 'search' && (
         <input
           id="playlist-query"
           type="text"

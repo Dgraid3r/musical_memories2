@@ -9,10 +9,13 @@ import type {
   MyPendingInvite,
   Notification,
   PlaceResult,
+  PlaylistGenerateResult,
   PlaylistResult,
   PublicWorkspace,
   PublicWorkspaceSort,
   SharedEntry,
+  SpotifyStatus,
+  TrackResult,
   User,
   UserPublic,
   Workspace,
@@ -654,7 +657,7 @@ export async function searchPlaylists(query: string): Promise<PlaylistResult[]> 
   return res.json()
 }
 
-export async function fetchSpotifyStatus(token: string): Promise<{ connected: boolean }> {
+export async function fetchSpotifyStatus(token: string): Promise<SpotifyStatus> {
   const res = await fetch('/api/spotify/status', { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load Spotify status'))
   return res.json()
@@ -670,6 +673,48 @@ export async function getSpotifyConnectUrl(token: string): Promise<string> {
 export async function fetchMyPlaylists(token: string): Promise<PlaylistResult[]> {
   const res = await fetch('/api/spotify/me/playlists', { headers: authHeaders(token) })
   if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load your playlists'))
+  return res.json()
+}
+
+/** No auth required - app-only catalog search, same bar as searchPlaylists. */
+export async function searchTracks(query: string): Promise<TrackResult[]> {
+  const res = await fetch(`/api/spotify/tracks?q=${encodeURIComponent(query)}`)
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Track search failed'))
+  return res.json()
+}
+
+/** Creates a private playlist on the caller's linked Spotify account.
+ * A 409 means no account is linked ("Connect Spotify"); a 403 means the
+ * linked account was connected before playlist creation existed and has
+ * to reconnect to grant write access. */
+export async function createSpotifyPlaylist(
+  name: string,
+  trackUris: string[],
+  token: string,
+): Promise<PlaylistResult> {
+  const res = await fetch('/api/spotify/playlists', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ name, track_uris: trackUris }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Could not create the playlist'))
+  return res.json()
+}
+
+/** Whether "Generate from a prompt" is configured on this server at all. */
+export async function fetchPlaylistGeneratorStatus(): Promise<{ available: boolean }> {
+  const res = await fetch('/api/spotify/generate/status')
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Failed to load generator status'))
+  return res.json()
+}
+
+export async function generatePlaylistTracks(prompt: string, token: string): Promise<PlaylistGenerateResult> {
+  const res = await fetch('/api/spotify/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ prompt }),
+  })
+  if (!res.ok) throw new ApiError(res.status, await parseErrorMessage(res, 'Could not generate a playlist'))
   return res.json()
 }
 
